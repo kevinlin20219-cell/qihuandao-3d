@@ -1,0 +1,35 @@
+<!doctype html><meta charset="utf-8"><title>anim speed</title>
+<script type="importmap">{"imports":{"three":"/game/node_modules/three/build/three.module.js","three/addons/":"/game/node_modules/three/examples/jsm/"}}</script>
+<script type="module">
+// 量动作片段「隐含的移动速度」：着地脚在角色坐标里向后移动的速度。游戏移动速度应等于它，才不会滑步。
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const q = new URLSearchParams(location.search), R = {};
+const gltf = await new GLTFLoader().loadAsync(q.get('glb'));
+let clips = gltf.animations;
+if (q.get('clips')) clips = (await new GLTFLoader().loadAsync(q.get('clips'))).animations; // 借用别人的片段
+const root = gltf.scene; root.updateMatrixWorld(true);
+const L = root.getObjectByName('LeftFoot'), Rf = root.getObjectByName('RightFoot'), toe = (n) => root.getObjectByName(n);
+for (const name of ['walk', 'run', 'walk_natural', 'run_natural', 'idle']) {
+  const c = clips.find((x) => x.name === name); if (!c) continue;
+  const mixer = new THREE.AnimationMixer(root); const a = mixer.clipAction(c); a.play();
+  const N = 240, dt = c.duration / N, pts = [];
+  for (let i = 0; i <= N; i++) {
+    mixer.setTime(i * dt); root.updateMatrixWorld(true);
+    const l = L.getWorldPosition(new THREE.Vector3()), r = Rf.getWorldPosition(new THREE.Vector3());
+    pts.push({ l, r });
+  }
+  const minY = Math.min(...pts.flatMap((p) => [p.l.y, p.r.y]));
+  // 着地帧：较低的脚，且离最低点 2.5 cm 以内；它在 z 方向（前后）的速度
+  const sp = [];
+  for (let i = 0; i < N; i++) {
+    const k = pts[i].l.y < pts[i].r.y ? 'l' : 'r';
+    if (pts[i][k].y - minY > 0.025) continue;
+    sp.push(-(pts[i + 1][k].z - pts[i][k].z) / dt);
+  }
+  sp.sort((x, y) => x - y);
+  R[name] = { duration: +c.duration.toFixed(3), plantedFrames: sp.length, impliedSpeed: sp.length ? +sp[Math.floor(sp.length / 2)].toFixed(3) : null, p25: sp.length ? +sp[Math.floor(sp.length * 0.25)].toFixed(3) : null, p75: sp.length ? +sp[Math.floor(sp.length * 0.75)].toFixed(3) : null };
+  mixer.stopAllAction(); mixer.uncacheRoot(root);
+}
+window.__R = R; document.body.textContent = JSON.stringify(R);
+</script>

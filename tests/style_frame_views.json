@@ -1,0 +1,12 @@
+{
+ "batch": "entry_style_frame",
+ "purpose": "风格样张验收：宣传片 8s 机位 + 正常玩家视角，和宣传片并排给用户看（风格锁定 v0.1 第 5 节）",
+ "viewport": {"width": 1280, "height": 720},
+ "reference": "docs/美术参考/宣传片/promo_8s.jpg",
+ "views": [
+  {"id": "film_8s", "pos": [2.2, 1.5, 27.5], "look": [-0.6, 1.7, 15.8], "gate": "fully open"},
+  {"id": "entry_player_approach_open", "pos": [0, 2.3, 25.8], "look": [0, 2.5, 15.6], "gate": "fully open"},
+  {"id": "entry_player_approach_closed", "pos": [0, 2.3, 25.8], "look": [0, 2.5, 15.6], "gate": "closed"},
+  {"id": "entry_overview_open", "pos": [6.8, 3.8, 27.2], "look": [0, 2.2, 16.2], "gate": "fully open"}
+ ]
+}

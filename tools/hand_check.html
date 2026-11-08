@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8"><title>hand check</title>
+<style>html,body{margin:0;background:#dcd6c4}</style>
+<script type="importmap">{"imports":{"three":"/game/node_modules/three/build/three.module.js","three/addons/":"/game/node_modules/three/examples/jsm/"}}</script>
+<script type="module">
+// 只播放资产里的动作片段（不经过游戏的混合），看手的样子：用来判断问题在资产还是在游戏混合
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+const q = new URLSearchParams(location.search);
+const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); r.setSize(innerWidth, innerHeight);
+r.outputColorSpace = THREE.SRGBColorSpace; r.toneMapping = THREE.ACESFilmicToneMapping; document.body.appendChild(r.domElement);
+const sc = new THREE.Scene(); sc.background = new THREE.Color(0xdcd6c4);
+const pm = new THREE.PMREMGenerator(r); sc.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+sc.add(new THREE.HemisphereLight(0xffffff, 0x887755, 1.0)); const d = new THREE.DirectionalLight(0xffffff, 1.8); d.position.set(1, 3, 4); sc.add(d);
+const cam = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.01, 20);
+const L = new GLTFLoader();
+const g = await L.loadAsync(q.get('glb')), prop = (await L.loadAsync(q.get('prop'))).scene;
+g.scene.traverse((o) => { if (o.isSkinnedMesh) o.frustumCulled = false; }); sc.add(g.scene); const sock = g.scene.getObjectByName('prop_R'); prop.position.set(0, -0.042, 0); sock.add(prop);
+const mixer = new THREE.AnimationMixer(g.scene);
+const clip = g.animations.find((c) => c.name === (q.get('clip') || 'skill_observe'));
+const base = g.animations.find((c) => c.name === 'idle');
+const post = g.animations.find((c) => c.name === 'skill_observe_posture');
+const walkC = g.animations.find((c) => c.name === 'walk');
+const nodes = new Set([clip, post].filter(Boolean).flatMap((c) => c.tracks.map((t) => t.name.split('.')[0])));
+const bm = new THREE.AnimationClip('idle_mask', base.duration, base.tracks.filter((t) => !nodes.has(t.name.split('.')[0])));
+const bmA = mixer.clipAction(bm), a = mixer.clipAction(clip), pa = post ? mixer.clipAction(post) : null, fullIdle = mixer.clipAction(base), walkA = mixer.clipAction(walkC);
+bmA.play(); a.play(); if (pa) pa.play();
+// mode: 'obs' 观察；'idle' 放松站立；'walk' 走路中
+window.__mode = (m, wt) => {
+  for (const x of [bmA, a, pa, fullIdle, walkA]) if (x) { x.stop(); }
+  if (m === 'obs') { bmA.play(); a.play(); if (pa) pa.play(); }
+  else if (m === 'idle') fullIdle.play();
+  else { walkA.play(); walkA.time = wt || 0; walkA.paused = true; }
+  window.__m = m;
+};
+window.__set = (t, view) => {
+  if (window.__m !== 'walk') { a.time = t; a.paused = true; if (pa) { pa.time = t; pa.paused = true; } bmA.time = 0; fullIdle.time = 0; } mixer.update(0); g.scene.updateMatrixWorld(true);
+  const hand = g.scene.getObjectByName('RightHand').getWorldPosition(new THREE.Vector3());
+  const lens = prop.localToWorld(new THREE.Vector3(0, 0.132, 0)), grip = prop.localToWorld(new THREE.Vector3(0, 0.042, 0));
+  const h = view === 'face' || view === 'body' ? g.scene.getObjectByName('Head').getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(-0.05, 0.03, 0)) : hand.clone().lerp(grip, 0.5);
+  const off = { front: [0, 0.02, 0.32], side: [-0.3, 0.03, 0.05], top: [0.03, 0.28, 0.12], back: [0.05, 0.05, -0.3], tq: [-0.2, 0.06, 0.24], face: [0, 0.0, 0.75], body: [-1.2, -0.25, 1.6], faceSide: [-0.7, 0.05, 0.1] }[view];
+  cam.position.set(h.x + off[0], h.y + off[1], h.z + off[2]); cam.lookAt(h); r.render(sc, cam);
+  return { hand: hand.toArray().map((v) => +v.toFixed(3)), lens: lens.toArray().map((v) => +v.toFixed(3)), grip: grip.toArray().map((v) => +v.toFixed(3)) };
+};
+window.__ready = true;
+</script>

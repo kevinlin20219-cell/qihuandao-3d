@@ -1,0 +1,148 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>FBX to GLB</title>
+<style>html,body{margin:0;background:#dcd6c4;overflow:hidden}#hud{position:fixed;left:8px;top:8px;font:14px sans-serif;background:#0008;color:#fff;padding:6px 10px;border-radius:6px;white-space:pre}</style>
+<script type="importmap">{"imports":{"three":"/game/node_modules/three/build/three.module.js","three/addons/":"/game/node_modules/three/examples/jsm/"}}</script>
+</head><body><div id="hud"></div>
+<script type="module">
+// 用 Three.js 0.182 的 FBXLoader 读取 FBX，检查蒙皮，再用 GLTFExporter 导出标准 GLB。
+// 参数：?fbx=<url>&h=<目标身高米>
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const q = new URLSearchParams(location.search);
+const R = { three: THREE.REVISION, warnings: [] };
+const ow = console.warn; console.warn = (...a) => { R.warnings.push(a.join(' ').slice(0, 200)); ow(...a); };
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(innerWidth, innerHeight); renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xdcd6c4);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7a60, 1.3));
+const sun = new THREE.DirectionalLight(0xffffff, 2.0); sun.position.set(2, 4, 5); scene.add(sun);
+const fill = new THREE.DirectionalLight(0xfff1dc, 0.8); fill.position.set(0, 1.5, 6); scene.add(fill);
+const grid = new THREE.GridHelper(4, 40, 0x666666, 0xaaaaaa); scene.add(grid);
+const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.05, 50);
+
+function skinnedMeshes(o) { const a = []; o.traverse((c) => { if (c.isSkinnedMesh) a.push(c); }); return a; }
+function bones(o) { const a = []; o.traverse((c) => { if (c.isBone) a.push(c); }); return a; }
+// 当前姿势下蒙皮后的顶点（世界坐标）
+function skinnedPositions(m) {
+  m.updateMatrixWorld(true); m.skeleton.update();
+  const n = m.geometry.attributes.position.count, out = new Float32Array(n * 3), v = new THREE.Vector3();
+  for (let i = 0; i < n; i++) { m.getVertexPosition(i, v); v.applyMatrix4(m.matrixWorld); out.set([v.x, v.y, v.z], i * 3); }
+  return out;
+}
+// 不蒙皮时的顶点（绑定姿势，世界坐标）
+function restPositions(m) {
+  const p = m.geometry.attributes.position, out = new Float32Array(p.count * 3), v = new THREE.Vector3();
+  const mat = new THREE.Matrix4().multiplyMatrices(m.matrixWorld, m.bindMatrix);
+  // 绑定姿势下，蒙皮结果 = bindMatrix * 原始位置（再乘 matrixWorld 前需抵消 bindMatrixInverse；这里直接按 three 的公式取 matrixWorld 下的未蒙皮位置）
+  for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i).applyMatrix4(m.matrixWorld); out.set([v.x, v.y, v.z], i * 3); }
+  return out;
+}
+function maxDev(a, b) { let mx = 0, s = 0; const n = a.length / 3; for (let i = 0; i < n; i++) { const d = Math.hypot(a[i*3]-b[i*3], a[i*3+1]-b[i*3+1], a[i*3+2]-b[i*3+2]); mx = Math.max(mx, d); s += d*d; } return { max: +mx.toFixed(5), rms: +Math.sqrt(s / n).toFixed(5) }; }
+function bboxSkinned(o) { const b = new THREE.Box3(); o.updateMatrixWorld(true); o.traverse((c) => { if (c.isSkinnedMesh) { c.skeleton.update(); c.computeBoundingBox(); b.union(c.boundingBox.clone().applyMatrix4(c.matrixWorld)); } else if (c.isMesh) { b.expandByObject(c); } }); return b; }
+function weightStats(m) {
+  const sw = m.geometry.attributes.skinWeight, si = m.geometry.attributes.skinIndex, n = sw.count; const prim = {}; let multi = 0;
+  for (let i = 0; i < n; i++) { let best = -1, bw = -1, cnt = 0; for (let k = 0; k < 4; k++) { const w = sw.getComponent(i, k); if (w > 0.01) cnt++; if (w > bw) { bw = w; best = si.getComponent(i, k); } } const nm = m.skeleton.bones[best]?.name || best; prim[nm] = (prim[nm] || 0) + 1; if (cnt > 1) multi++; }
+  const top = Object.entries(prim).sort((a, b) => b[1] - a[1]).slice(0, 12);
+  return { vertices: n, vertsWithMultipleInfluences: multi, primaryBoneTop12: top, bonesUsedAsPrimary: Object.keys(prim).length };
+}
+const shots = {};
+function shoot(tag, root, view) {
+  const b = bboxSkinned(root), c = b.getCenter(new THREE.Vector3()), h = b.max.y - b.min.y;
+  const d = h * 2.4; const dir = { front: [0, 0, 1], side: [1, 0, 0], back: [0, 0, -1], tq: [0.7, 0.15, 0.7] }[view];
+  camera.position.set(c.x + dir[0] * d, c.y + dir[1] * d + h * 0.05, c.z + dir[2] * d); camera.lookAt(c);
+  renderer.render(scene, camera); shots[tag] = renderer.domElement.toDataURL('image/png');
+}
+function pose(root, spec) { // spec: {骨骼名: [x,y,z] 度}，绕「世界坐标轴」旋转（角色面向 +Z，X 轴是左右方向，绕 X 是前后摆动）
+  for (const b of bones(root)) { if (!b.userData.rest) b.userData.rest = b.quaternion.clone(); b.quaternion.copy(b.userData.rest); }
+  root.updateMatrixWorld(true);
+  for (const [n, e] of Object.entries(spec)) {
+    const b = root.getObjectByName(n); if (!b) { R.warnings.push('pose: 没有骨骼 ' + n); continue; }
+    const pw = b.parent.getWorldQuaternion(new THREE.Quaternion());
+    const qw = new THREE.Quaternion().setFromEuler(new THREE.Euler(...e.map(THREE.MathUtils.degToRad)));
+    // 新的局部旋转 = pw⁻¹ · qw · pw · 局部
+    b.quaternion.premultiply(pw.clone().invert().multiply(qw).multiply(pw));
+    root.updateMatrixWorld(true);
+  }
+}
+// 世界轴角度：大腿向前抬 = 绕 X 负方向；膝盖向后弯 = 绕 X 正方向；左前臂向前弯 = 绕 Y 负方向
+const POSES = {
+  bend: { LeftForeArm: [0, -80, 0], RightForeArm: [0, 80, 0], LeftUpLeg: [-60, 0, 0], LeftLeg: [80, 0, 0], RightLeg: [45, 0, 0] },
+  walkA: { LeftUpLeg: [-28, 0, 0], LeftLeg: [15, 0, 0], RightUpLeg: [22, 0, 0], RightLeg: [35, 0, 0], LeftArm: [0, 0, -70], RightArm: [0, 0, 70], Spine: [0, 6, 0] },
+  walkB: { RightUpLeg: [-28, 0, 0], RightLeg: [15, 0, 0], LeftUpLeg: [22, 0, 0], LeftLeg: [35, 0, 0], LeftArm: [0, 0, -70], RightArm: [0, 0, 70], Spine: [0, -6, 0] },
+  run: { LeftUpLeg: [-60, 0, 0], LeftLeg: [70, 0, 0], RightUpLeg: [35, 0, 0], RightLeg: [80, 0, 0], Spine: [12, 0, 0], LeftArm: [0, 0, -65], RightArm: [0, 0, 65], LeftForeArm: [-80, 0, 0], RightForeArm: [-80, 0, 0] },
+  headSpine: { Head: [0, 40, 0], Neck: [0, 15, 0], Spine2: [0, 25, 0], Spine1: [15, 0, 0] },
+};
+
+async function main() {
+  const url = q.get('fbx'), H = +(q.get('h') || 0);
+  const t0 = performance.now();
+  const fbx = await new FBXLoader().loadAsync(url);
+  R.fbxLoadMs = Math.round(performance.now() - t0);
+  // FBX 材质是 Phong，贴图路径也读不到；按 .fbm 里的贴图重建为 glTF 标准 PBR 材质
+  const tdir = q.get('tex'); R.textures = {};
+  if (tdir) {
+    const tl = new THREE.TextureLoader(); const ld = async (f, srgb) => { const t = await tl.loadAsync(tdir + f); if (srgb) t.colorSpace = THREE.SRGBColorSpace; R.textures[f] = [t.image.width, t.image.height]; t.userData.mimeType = srgb || f.endsWith('JPEG') ? 'image/jpeg' : 'image/png'; return t; };
+    const pre = q.get('texpre');
+    const [bc, nm, rm] = await Promise.all([ld(pre + 'basecolor.JPEG', true), ld(pre + 'normal.PNG', false), ld(pre + 'rm.JPEG', false)]);
+    fbx.traverse((c) => { if (c.isMesh) { R.fbx_original_material = { type: c.material.type, name: c.material.name }; c.material = new THREE.MeshStandardMaterial({ name: 'mat_paipai', map: bc, normalMap: nm, roughnessMap: rm, metalnessMap: rm, roughness: 1, metalness: 1 }); } });
+  }
+  // FBXLoader 输出的是不共享顶点的三角形，合并相同顶点（位置、UV、法线、权重都相同才合并）
+  fbx.traverse((c) => { if (c.isSkinnedMesh) { const n0 = c.geometry.attributes.position.count; for (const k of Object.keys(c.geometry.attributes)) if (!['position','normal','uv','skinIndex','skinWeight'].includes(k)) c.geometry.deleteAttribute(k); c.geometry = mergeVertices(c.geometry, 1e-6); R.mergeVertices = { before: n0, after: c.geometry.attributes.position.count }; } });
+  scene.add(fbx); fbx.updateMatrixWorld(true);
+  const sm = skinnedMeshes(fbx), bs = bones(fbx);
+  R.fbx = { rootScale: fbx.scale.toArray(), skinnedMeshes: sm.length, meshes: 0, bones: bs.length, boneNames: bs.map((b) => b.name), animations: fbx.animations.map((a) => a.name) };
+  fbx.traverse((c) => { if (c.isMesh) R.fbx.meshes++; });
+  R.fbx.materials = []; fbx.traverse((c) => { if (c.isMesh) for (const m of [].concat(c.material)) R.fbx.materials.push({ name: m.name, type: m.type, map: !!m.map, normalMap: !!m.normalMap, mapSize: m.map?.image ? [m.map.image.width, m.map.image.height] : null }); });
+  // 绑定姿势是否变形：蒙皮结果对比原始几何
+  R.fbx.bindPoseDeviation = sm.map((m) => maxDev(skinnedPositions(m), restPositions(m)));
+  R.fbx.weights = sm.map(weightStats);
+  let b = bboxSkinned(fbx); R.fbx.bbox = { min: b.min.toArray(), max: b.max.toArray(), height: b.max.y - b.min.y };
+
+  // 规范化：骨骼去掉 mixamorig 前缀；根对象缩放到米；脚底 y=0，脚中间 x=z=0
+  for (const c of bs) c.name = c.name.replace(/^mixamorig\d*[:_]?/, '');
+  const root = new THREE.Group(); root.name = 'char_paipai'; scene.remove(fbx); root.add(fbx); scene.add(root);
+  const h0 = R.fbx.bbox.height, s = H > 0 ? H / h0 : 1; fbx.scale.multiplyScalar(s); fbx.updateMatrixWorld(true);
+  b = bboxSkinned(fbx); const c = b.getCenter(new THREE.Vector3());
+  fbx.position.x -= c.x; fbx.position.z -= c.z; fbx.position.y -= b.min.y; root.updateMatrixWorld(true);
+  // 把缩放「应用」进数据：骨骼位置和顶点都乘 s，节点缩放回到 1，然后在绑定姿势下重算逆绑定矩阵
+  if (s !== 1) {
+    const nonunit = []; fbx.traverse((c) => { if (c !== fbx && Math.abs(c.scale.x - 1) > 1e-6) nonunit.push(c.name); }); R.nonUnitScaleInside = nonunit;
+    for (const bn of bs) bn.position.multiplyScalar(s);
+    fbx.traverse((c) => { if (c.isMesh && !c.isBone) { c.geometry.scale(s, s, s); c.position.multiplyScalar(s); } });
+    fbx.position.multiplyScalar(1); fbx.scale.set(1, 1, 1); fbx.updateMatrixWorld(true);
+    fbx.traverse((c) => { if (c.isSkinnedMesh) { c.bind(c.skeleton, c.matrixWorld); c.skeleton.calculateInverses(); } });
+    fbx.updateMatrixWorld(true);
+  }
+  R.normalize = { scaleApplied: s, note: H > 0 ? `按目标身高 ${H} m 缩放` : '未缩放' };
+  // 朝向：左手（LeftHand）应在 +X 一侧（角色面向 +Z 时，角色的左手在世界 +X）
+  const lh = root.getObjectByName('LeftHand'), rh = root.getObjectByName('RightHand');
+  if (lh && rh) { const a = lh.getWorldPosition(new THREE.Vector3()), r = rh.getWorldPosition(new THREE.Vector3()); R.facing = { leftHandX: +a.x.toFixed(3), rightHandX: +r.x.toFixed(3), facesPlusZ: a.x > r.x, armSpan: +(a.x - r.x).toFixed(3), handHeight: +a.y.toFixed(3) }; }
+  const hips = root.getObjectByName('Hips'); if (hips) R.hipsHeight = +hips.getWorldPosition(new THREE.Vector3()).y.toFixed(3);
+
+  // 导出 GLB
+  const glb = await new GLTFExporter().parseAsync(root, { binary: true, onlyVisible: true, animations: [] });
+  const bytes = new Uint8Array(glb); let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  window.__glb = btoa(bin); R.glbBytes = bytes.length;
+  scene.remove(root);
+
+  // 重新读取导出的 GLB，再验证一次
+  const gltf = await new GLTFLoader().parseAsync(glb, '');
+  const g = gltf.scene; scene.add(g); g.updateMatrixWorld(true);
+  const gsm = skinnedMeshes(g), gb = bones(g);
+  b = bboxSkinned(g);
+  R.glb = { skinnedMeshes: gsm.length, bones: gb.length, boneNames: gb.map((x) => x.name), bindPoseDeviation: gsm.map((m) => maxDev(skinnedPositions(m), restPositions(m))), weights: gsm.map(weightStats), bbox: { min: b.min.toArray().map((v) => +v.toFixed(4)), max: b.max.toArray().map((v) => +v.toFixed(4)), height: +(b.max.y - b.min.y).toFixed(4) } };
+  // FBX 与 GLB 的蒙皮结果是否一致（绑定姿势）
+  for (const v of ['front', 'side', 'back', 'tq']) shoot('bind_' + v, g, v);
+  for (const [n, p] of Object.entries(POSES)) { pose(g, p); shoot(n + '_front', g, 'front'); shoot(n + '_side', g, 'side'); if (n === 'headSpine') shoot(n + '_tq', g, 'tq'); }
+  pose(g, {});
+  R.done = true;
+  document.getElementById('hud').textContent = JSON.stringify({ bones: R.glb.bones, h: R.glb.bbox.height, dev: R.glb.bindPoseDeviation }, null, 1);
+}
+window.__R = R; window.__shots = shots;
+main().catch((e) => { R.error = String(e && e.stack || e); R.done = true; });
+</script></body></html>

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>奇幻岛 · 3D 样段</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M8 1C4 5 3 9 8 15c5-6 4-10 0-14z%22 fill=%22%23e2b45a%22/%3E%3C/svg%3E">
+<style>
+  :root{
+    --cream:#f6efdc; --paper:#efe5c9; --ink:#24382b; --ink-soft:#5d6f60;
+    --leaf:#2f5a3e; --sun:#e2b45a; --night:#0c1812; --warn:#e8873a;
+    --ink2:#3b2c1c;
+    --font:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+    color-scheme:dark;
+  }
+  [hidden]{display:none!important}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--night);color:var(--cream);font-family:var(--font)}
+  #view{position:fixed;inset:0}
+  #view canvas{display:block;width:100%;height:100%;outline:none}
+  .ui{position:fixed;z-index:5;pointer-events:none}
+  /* v58 用户 11-02：界面统一成绘本风——纸张底、暖棕墨色、苔绿和金色点缀 */
+  .paper{background:linear-gradient(180deg,#fbf3df 0%,#f1e3c2 100%);color:var(--ink2);border:1.5px solid #c8a872;border-radius:14px;
+    box-shadow:inset 0 0 0 3px rgba(251,243,223,.9),inset 0 0 0 4px rgba(160,118,60,.28),0 6px 16px rgba(40,25,10,.32)}
+  /* objective：一行标题 + 一行说明，不截断，给右上角让位 */
+  #objective{top:16px;left:16px;display:flex;align-items:flex-start;gap:10px;font-size:14px;padding:9px 14px 10px 12px;
+    max-width:min(440px,calc(100vw - 330px));line-height:1.45}
+  #objective::before{content:"";flex:none;width:18px;height:22px;margin-top:1px;background:linear-gradient(160deg,#9cc36a,#3f6b3a);border-radius:50% 50% 50% 50%/60% 60% 40% 40%;transform:rotate(-18deg);box-shadow:inset -2px -2px 0 rgba(0,0,0,.12)}
+  #objective b{display:block;font-size:15px;color:#2f4a2c;margin-bottom:1px}
+  /* leaves */
+  #leaves{top:16px;right:16px;display:flex;gap:5px;align-items:center;padding:7px 12px;font-size:12px;font-weight:700;color:#6a5030}
+  #leaves span{margin-right:3px}
+  #leaves i{display:inline-block;width:11px;height:16px;border-radius:50% 50% 50% 50%/60% 60% 40% 40%;background:#d6c6a1;box-shadow:inset 0 0 0 1px #b79c6c;transform:rotate(20deg)}
+  #leaves i.on{background:linear-gradient(160deg,#ffe9a6,var(--sun));box-shadow:0 0 8px rgba(226,180,90,.9)}
+  /* party */
+  #party{top:62px;right:16px;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+  .member{display:flex;gap:8px;align-items:center;min-width:150px;padding:6px 12px 6px 6px;opacity:.86;transform:scale(.94);transform-origin:right center;transition:transform .2s,opacity .2s}
+  .member.active{opacity:1;transform:scale(1.04);border:2.5px solid var(--sun);box-shadow:inset 0 0 0 3px rgba(251,243,223,.9),0 0 0 3px rgba(226,180,90,.35),0 8px 20px rgba(40,25,10,.4)}
+  .member.active::after{content:"当前";margin-left:auto;font-size:11px;font-weight:700;color:#fff;background:#c58a2c;border-radius:999px;padding:1px 7px}
+  #party.compact{gap:4px}
+  #party.compact .member{padding:4px 10px 4px 5px;min-width:110px}
+  #party.compact .member .dot{width:24px;height:24px;font-size:12px}
+  #party.compact .member:not(.active) small{display:none}
+  .member .dot{width:32px;height:32px;border-radius:50%;flex:none;display:grid;place-items:center;color:#fff;font-weight:700;font-size:15px;box-shadow:inset 0 -3px 0 rgba(0,0,0,.18),0 0 0 2px #fbf3df}
+  .member b{display:block;font-size:15px;color:var(--ink2)}
+  .member small{font-size:11.5px;color:#7a6446}
+  .member .k{display:inline-block;min-width:15px;font-size:11px;font-weight:700;color:#fff;background:#6a8a4a;border-radius:4px;text-align:center;margin-right:5px;padding:0 3px}
+  /* key hints：只有当前要做的事是醒目的按钮，常驻操作缩成一行小字 */
+  #keys{bottom:18px;left:16px;display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;font-size:14px;color:#fbf3df;max-width:calc(100vw - 360px)}
+  #keys span{padding:6px 12px;border-radius:12px;background:rgba(40,28,14,.55);text-shadow:0 1px 2px rgba(0,0,0,.5)}
+  #keys span.main{font-weight:700;font-size:15px;padding:7px 14px}
+  #keys span.dim{background:none;padding:2px 0;font-size:12px;opacity:.9}
+  #keys span kbd{display:inline-block;min-width:18px;padding:2px 6px;margin-right:6px;border-radius:6px;background:#fbf3df;color:var(--ink2);font:700 12px/1.3 var(--font);text-align:center;text-shadow:none;box-shadow:0 2px 0 #b79c6c}
+  #keys span.main kbd{background:var(--sun);color:#3b2c1c;box-shadow:0 2px 0 #9a6f22}
+  #keys span.dim kbd{padding:0 5px;font-size:11px;margin-right:4px}
+  /* dialogue：有说话人时变成他头顶的对话泡，看不到人时落回屏幕下方 */
+  #say{left:50%;bottom:92px;transform:translateX(-50%);width:max-content;max-width:min(460px,72vw);padding:10px 16px 11px;
+    font:500 17px/1.6 "Songti SC","Noto Serif CJK SC","Source Han Serif SC","STSong",serif}
+  #say.bubble{bottom:auto;transform:translate(-50%,-100%)}
+  #say.bubble::after{content:"";position:absolute;left:var(--tail,50%);bottom:-11px;width:18px;height:12px;margin-left:-9px;
+    background:#f1e3c2;clip-path:polygon(0 0,100% 0,50% 100%);filter:drop-shadow(0 2px 0 rgba(160,118,60,.5))}
+  #say b{position:absolute;top:-13px;left:14px;font:700 12px/1 var(--font);color:#fff;background:var(--who,#6a8a4a);padding:4px 9px;border-radius:999px;box-shadow:0 2px 4px rgba(40,25,10,.3)}
+  #say b:empty{display:none}
+  #say span{display:block;margin-top:2px}
+  /* toast */
+  #toast{top:76px;left:50%;transform:translateX(-50%);background:linear-gradient(180deg,#fff6d8,#f1dfa8);color:#4a3a12;
+    padding:10px 20px;border-radius:999px;font-size:16px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+  /* warning vignette (Paipai's danger sense) */
+  #warn{inset:0;box-shadow:inset 0 0 140px 40px rgba(232,135,58,.0);transition:box-shadow .25s}
+  #warn.on{box-shadow:inset 0 0 160px 50px rgba(232,135,58,.55)}
+  /* observe vignette */
+  #observe{inset:0;background:radial-gradient(circle at 50% 50%,transparent 38%,rgba(10,30,40,.55) 75%);opacity:0;transition:opacity .2s}
+  #observe.on{opacity:1}
+  #fade{inset:0;background:#000;opacity:0;transition:opacity .35s}
+  #fade.on{opacity:1}
+  #xray{top:50%;left:50%;transform:translate(-50%,-50%);width:min(560px,86vw);background:rgba(16,34,46,.92);border:1px solid rgba(160,220,255,.45);
+    border-radius:14px;padding:18px 22px;color:#dff3ff;font-size:15px;line-height:1.6}
+  #xray h3{margin:0 0 8px;font-size:17px;color:#9fe0ff}
+  #xray ol{margin:6px 0 0;padding-left:20px}
+  #xray .close{margin-top:10px;font-size:12px;opacity:.7}
+  #crosshair{top:50%;left:50%;width:22px;height:22px;margin:-11px 0 0 -11px;border:2px solid var(--sun);border-radius:50%}
+  /* screens */
+  .screen{position:fixed;inset:0;z-index:20;display:grid;place-items:safe center;padding:16px;
+    background:radial-gradient(120% 90% at 50% 20%,#2a4a33 0%,#14251c 45%,var(--night) 100%)}
+  .card{width:min(560px,100%);background:var(--cream);color:var(--ink);border-radius:18px;padding:28px 32px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:grid;gap:14px}
+  .card h1{margin:0;font-size:34px;font-weight:600;letter-spacing:.04em}
+  .card p{margin:0;line-height:1.7;color:var(--ink-soft)}
+  .card .tag{font-size:12px;letter-spacing:.18em;color:var(--ink-soft)}
+  .card button{appearance:none;border:0;border-radius:12px;padding:13px 18px;font:600 17px var(--font);background:var(--leaf);color:var(--cream);cursor:pointer}
+  .card button:hover{background:#376a49}
+  .card button:disabled{background:#b9b39f;cursor:progress}
+  .card .row{display:flex;gap:10px;flex-wrap:wrap}
+  .card .row button.ghost{background:#e4dabd;color:var(--ink)}
+  .card kbd{font:700 12px var(--font);padding:1px 6px;border-radius:5px;background:#e9e0c6}
+  .keylist{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:14px}
+  #pause{background:rgba(8,16,12,.6)}
+</style>
+</head>
+<body>
+<div id="view"></div>
+
+<div class="ui paper" id="objective" hidden></div>
+<div class="ui paper" id="leaves" hidden><span>光之叶</span></div>
+<div class="ui" id="party" hidden></div>
+<div class="ui" id="keys" hidden></div>
+<div class="ui paper" id="say" hidden><b></b><span></span></div>
+<div class="ui" id="toast" hidden></div>
+<div class="ui" id="warn"></div>
+<div class="ui" id="observe"></div>
+<div class="ui" id="crosshair" hidden></div>
+<div class="ui" id="xray" hidden></div>
+<div class="ui" id="fade"></div>
+
+<div class="screen" id="title">
+  <div class="card">
+    <div class="tag">3D 重制 · 第一章样段</div>
+    <h1>奇幻岛 · 吊桥重新相连</h1>
+    <p>汤团、涵涵、派派走进森林，吊桥却断了。三个人各有本领，要一起想办法让桥重新连上。</p>
+    <div class="keylist">
+      <kbd>W A S D</kbd><span>移动，<kbd>Shift</kbd> 跑，<kbd>空格</kbd> 跳</span>
+      <kbd>鼠标</kbd><span>点一下画面后移动鼠标转镜头（或按住右键拖动），滚轮远近</span>
+      <kbd>1 2 3</kbd><span>切换汤团 / 涵涵 / 派派</span>
+      <kbd>E</kbd><span>互动　<kbd>Q</kbd> 本领　<kbd>H</kbd> 提示　<kbd>M</kbd> 音乐　<kbd>V</kbd> 配音　<kbd>Esc</kbd> 暂停</span>
+    </div>
+    <button id="start" disabled>正在准备森林…</button>
+  </div>
+</div>
+
+<div class="screen" id="pause" hidden>
+  <div class="card">
+    <h1>休息一下</h1>
+    <p id="pauseInfo">进度已自动保存在这台电脑的浏览器里。</p>
+    <div class="row">
+      <button id="resume">继续冒险</button>
+      <button id="restart" class="ghost">从头再玩样段</button>
+    </div>
+    <div class="row" id="windRow" style="align-items:center;gap:6px;margin-top:12px;font-size:14px"><span style="margin-right:4px">风力</span></div>
+  </div>
+</div>
+
+<div class="screen" id="done" hidden>
+  <div class="card">
+    <div class="tag">第一章完成</div>
+    <h1>吊桥重新相连</h1>
+    <p id="doneInfo"></p>
+    <div class="row"><button id="again">再玩一次</button></div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>
