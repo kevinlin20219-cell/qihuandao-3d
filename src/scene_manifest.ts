@@ -232,6 +232,8 @@ export function setVineProgress(level: Level, progress: number) {
 /** 0310：每个清单项放进场景后先异步编译着色器、上传贴图，再显示（Windows 实测进门卡顿、石头黑轮廓）。main 里设置 */
 let warmup: ((objs: THREE.Object3D[]) => Promise<void>) | null = null;
 export function setWarmup(f: typeof warmup) { warmup = f; }
+/** 入口加载进度用：已处理 / 已知总数（每份清单读到后累加） */
+export const manifestProgress = { done: 0, total: 0 };
 const glbCache = new Map<string, Promise<Awaited<ReturnType<typeof loadGLB>>>>();
 async function loadShared(url: string) {
   const p = glbCache.get(url);
@@ -274,8 +276,9 @@ export async function applyManifest(level: Level, scene: THREE.Scene, url: strin
   const box = new THREE.Box3(), c = new THREE.Vector3();
   const urlOf = (it: ManifestItem) => new URL(it.glb, base).href;
   const prefetch = (k: number) => { const it = man.items[k]; if (!it || (it.kind && it.kind !== 'static') || (Array.isArray(it.place) && !it.place.length)) return; const u = urlOf(it); if (!glbCache.has(u)) { const q = loadGLB(u); q.catch(() => glbCache.delete(u)); glbCache.set(u, q); } };
+  manifestProgress.total += man.items.length;
   for (let k = 0; k < man.items.length; k++) {
-    const it = man.items[k];
+    const it = man.items[k]; manifestProgress.done++;
     for (let j = 1; j <= 3; j++) prefetch(k + j); // 0310：后面几项先并行下载解码，公网上逐个等太慢
     const before = new Set(scene.children);
     // 清单里写了 place: [] 表示"这一项不摆"（如 v10 撤掉的 tree_depth_shrub）；不能退回到原点摆一份，否则会在路口中间冒出一棵树

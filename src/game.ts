@@ -622,13 +622,13 @@ export class Game {
     if (!this.shout) return;
     const S = this.shout; S.t += dt;
     const pads = S.target === 'gate' ? this.level.gate.pads : this.level.pads;
-    if (pads.some((pd) => !pd.occupant)) { this.shout = null; this.ui.say('hanhan', '有人离开了，重新站好再喊。', 2.4, undefined, true); return; }
+    if (pads.some((pd) => !pd.occupant)) { this.shout = null; this.ui.countEnd(); this.ui.say('hanhan', '有人离开了，重新站好再喊。', 2.4, undefined, true); return; }
     const words = ['三——', '二——', '一！'];
-    while (S.beat < 3 && S.t >= S.beat) { this.ui.count(words[S.beat]); S.beat++; }
+    while (S.beat < 3 && S.t >= S.beat) { this.ui.count(words[S.beat], S.beat, this.shoutWin); S.beat++; }
     if (S.t > 2 + this.shoutWin) this.shoutMiss('late');
   }
   shoutMiss(kind: 'early' | 'late') {
-    this.shout = null; this.shoutFails++;
+    this.shout = null; this.shoutFails++; this.ui.countEnd('miss');
     const line = kind === 'early' ? '早了一点！等我喊到「一」再动手。' : '慢了一点！听到「一」马上按。';
     this.ui.say(this.shoutFails >= 2 ? 'hanhan' : 'tangtuan', this.shoutFails >= 2 ? line + '不急，再来一次。' : line, 2.6, undefined, true);
   }
@@ -639,7 +639,7 @@ export class Game {
     if (this.shout) {
       const dtOne = this.shout.t - 2;
       if (dtOne < -this.shoutWin) this.shoutMiss('early');
-      else { const tg = this.shout.target; this.shout = null; this.shoutFails = 0; if (tg === 'gate') this.openGate(); else this.raiseBridge(); }
+      else { const tg = this.shout.target; this.shout = null; this.shoutFails = 0; this.ui.countEnd('ok'); if (tg === 'gate') this.openGate(); else this.raiseBridge(); }
       return;
     }
     if (this.itemInteract()) return;

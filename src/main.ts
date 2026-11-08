@@ -2,6 +2,7 @@ import { batchMultiDrawEnvironment } from './codex/environment_multidraw';
 import { batchStaticEnvironment } from './codex/environment_batches';
 import { installDeerContactShade } from './codex/deer_contact_shade';
 import { collectContactBlobs } from './contact_blobs';
+import { setupIntro } from './intro';
 import { chooseInteractionCameraOffset } from './codex/interaction_camera';
 import { chapter1Completion } from './codex/chapter1_completion';
 import { createCinematicFoliageFade } from './codex/cinematic_foliage';
@@ -28,6 +29,10 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 const $ = (id: string) => document.getElementById(id)!;
 
 async function boot() {
+  // 入口简介和开场动画先出来，动画放着的时候继续往下加载（用户 11-08）
+  const intro = setupIntro();
+  let bootStage = 0.05; intro.setProgress(0.03, '正在准备角色');
+  const progTimer = setInterval(() => { const mp = (window as any).__qhdManifestProgress as { done: number; total: number } | undefined; const env = mp && mp.total ? mp.done / Math.max(mp.total, 150) : 0; intro.setProgress(0.3 * bootStage + 0.7 * env, env > 0 ? '正在布置森林' : '正在准备角色'); }, 300);
   const view = $('view');
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   // ?quality=high|mid|low 固定画质；默认 auto（自动测试 / 无头浏览器时不自动调，保证截图一致）
@@ -327,7 +332,7 @@ async function boot() {
   let farL: { obj: THREE.Object3D; hideBelow: number }[] = [];
   let environmentBatchHandle: ReturnType<typeof batchStaticEnvironment> | null = null;
   let zones: { update(dt: number, z: number): void; stats: object } | null = null;
-  if (envMan) import('./scene_manifest').then(async ({ applyManifest, windTime, farLayers, setWarmup }) => { windT = windTime; farL = farLayers;
+  if (envMan) import('./scene_manifest').then(async ({ applyManifest, windTime, farLayers, setWarmup, manifestProgress }) => { windT = windTime; farL = farLayers; (window as any).__qhdManifestProgress = manifestProgress;
     if (params.get('warm') !== '0') setWarmup(warmObjects); const all = []; for (const u of envMan.split(',')) all.push(...await applyManifest(game.level, scene, u, game.ph)); return all; }).then((rep) => {
     (window as any).__qhd.manifest = rep;
     cinematicFoliage.refresh();
@@ -416,9 +421,13 @@ async function boot() {
         }
         (window as any).__qhd.grayFloors = slabs.length;
       } }
+    // 0316（用户 Windows 截图）：树冠满是黑色碎斑——薄叶片卡在自己身上算阴影（阴影噪点）。树冠叶片不接收阴影（仍投影），
+    // 地面草、蕨、灌木照旧接收。必须在合批前设置（合批按 receiveShadow 分组）。?leafshadow=1 恢复
+    if (params.get('leafshadow') !== '1') { let n = 0; scene.traverse((o: any) => { if (o.isMesh && o.receiveShadow && /crown|canopy|foliage|spray|lobe|leaves|leaf_card|treewall|tree_.*leaf/i.test(o.name) && !/COL_|MK_|bark|trunk|root|stem|litter|fallen|vine_leaf|grass|fern|bush|herb/i.test(o.name)) { o.receiveShadow = false; n++; } }); (window as any).__qhd.leafNoRecv = n; }
     // 0310 第 7 项：石头脚下的接触暗斑（合批前收集，物理碰撞就绪后摆放）
     if (params.get('contact') !== '0') { const cb = collectContactBlobs(scene); setTimeout(() => { try { (window as any).__qhd.contact = cb.finish((f, d, m) => game.ph.ray(f, d, m)).stats; } catch (e) { console.warn('contact', e); } }, 1500); }
     if (params.get('render_batches') !== '0') { const h = (renderer.extensions.has('WEBGL_multi_draw') && params.get('render_multidraw') !== '0' ? batchMultiDrawEnvironment : batchStaticEnvironment)(THREE, scene, farL); environmentBatchHandle = h; (window as any).__qhd.environmentBatches = h.stats; cinematicFoliage.refresh(); if (params.get('warm') !== '0' && h.groups?.length) void warmObjects(h.groups); }
+    intro.envReady(); clearInterval(progTimer);
     if (new URLSearchParams(location.search).get('zone') !== '0') import('./scene_manifest').then(({ makeZoneCuller, farIdSet }) => { zones = makeZoneCuller(scene, farIdSet); (window as any).__qhd.zones = zones.stats; });
     if (tone2 && new URLSearchParams(location.search).get('dense') !== '0' && !/botanical/.test(envMan || '')) setTimeout(() => Promise.all([import('./atmosphere'), import('./codex/v49_art_compat')]).then(([{ densifyPlants }, { shouldSkipDensePlant }]) => { // v49：路边植被加密（等新碰撞进物理查询后再贴地）；0179：跳过新模型已铺植物的区域，避开桥头机关岗位
       const L = game.level, avoid = [...L.lures, ...L.gate.pads, ...L.pads, L.deerState.calmPad].map((p) => p.pos.clone());
@@ -455,18 +464,10 @@ async function boot() {
   const cam = { yaw: 0, pitch: look2 ? 0.24 : 0.32, dist: look2 ? 3.9 : 4.5, target: new THREE.Vector3() };
   let playing = false, paused = false, finished = false;
 
-  const startBtn = $('start') as HTMLButtonElement;
-  const hasSave = game.hasSave();
-  startBtn.disabled = false;
-  startBtn.textContent = hasSave ? '继续冒险' : '开始冒险';
-  if (hasSave) {
-    const fresh = document.createElement('button');
-    fresh.className = 'ghost'; fresh.textContent = '从头开始';
-    fresh.style.cssText = 'background:#e4dabd;color:#24382b';
-    startBtn.after(fresh);
-    fresh.addEventListener('click', () => { game.clearSave(); start(false); });
-  }
-  startBtn.addEventListener('click', () => start(hasSave));
+  // 入口按钮由 intro.ts 接管：动画放完且加载好以后才调用 start
+  bootStage = 1;
+  intro.ready({ start: (resume) => start(resume), clearSave: () => game.clearSave() });
+  if (!envMan) { intro.envReady(); clearInterval(progTimer); }
 
   // 背景音乐（程序合成，M 键开关；?music=0 关闭）
   let music: Music | null = null; (window as any).__qhdMusic = Music; // 测试用：离线渲染试听
@@ -477,6 +478,18 @@ async function boot() {
   ui.onLine = (w, t) => { if (voice) return voice.speak(w, t) && 0; const d = lines?.speak(w, t) ?? 0; lines?.prefetch(ui.upcoming()); return d; };
   ui.onLineEnd = () => lines?.stop();
   addEventListener('keydown', (e) => { if (e.code !== 'KeyV' || !playing) return; const v = lines ?? voice; if (v) ui.toast(v.toggle() ? '配音：开（V 关闭）' : '配音：关（V 打开）', 1.6); });
+  // 声音总开关（用户 11-08）：左下角喇叭按钮，一键关掉音乐和配音；状态记在本机（qhd_mute）
+  const sndBtn = document.createElement('button'); sndBtn.id = 'sndBtn';
+  sndBtn.style.cssText = 'position:fixed;left:16px;bottom:58px;z-index:25;width:44px;height:44px;border-radius:50%;border:2px solid rgba(122,90,50,.8);background:rgba(246,239,220,.92);font-size:20px;line-height:1;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);display:none';
+  let muted = false; try { muted = localStorage.getItem('qhd_mute') === '1'; } catch { /* */ }
+  const applyMute = () => {
+    sndBtn.textContent = muted ? '🔇' : '🔊'; sndBtn.title = muted ? '打开声音' : '关闭声音';
+    try { localStorage.setItem('qhd_mute', muted ? '1' : '0'); localStorage.setItem('qhd_music', muted ? '0' : '1'); localStorage.setItem('qhd_voice', muted ? '0' : '1'); } catch { /* */ }
+    if (music && music.enabled === muted) music.toggle();
+    if (lines && lines.on === muted) lines.toggle();
+  };
+  sndBtn.onclick = (e) => { e.stopPropagation(); muted = !muted; applyMute(); ui.toast(muted ? '声音：关' : '声音：开', 1.4); (document.querySelector('canvas') as HTMLCanvasElement | null)?.focus(); };
+  document.body.appendChild(sndBtn);
   addEventListener('keydown', (e) => { if (e.code === 'KeyM' && music && playing) ui.toast(music.toggle() ? '音乐：开（M 关闭）' : '音乐：关（M 打开）', 1.6); });
   function start(resume: boolean) {
     $('title').hidden = true;
@@ -484,6 +497,7 @@ async function boot() {
     music?.resume();
     if (!voice && new URLSearchParams(location.search).get('voice') === 'babble') { try { voice = new Voice(); /* 用户 11-03：卡通咿呀声不合适，默认不用，只留 ?voice=babble 备查 */ } catch (e) { console.warn('说话声无法启动', e); } }
     voice?.resume(); lines?.resume();
+    applyMute(); sndBtn.style.display = 'block';
     ui.showHud(true);
     ui.party(game.squad, game.active);
     if (resume && game.load()) {

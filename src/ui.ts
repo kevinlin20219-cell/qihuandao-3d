@@ -90,18 +90,65 @@ export class UI {
     el.style.display = text ? 'block' : 'none';
     if (text) { (el.querySelector('.t') as HTMLElement).textContent = text; (el.querySelector('.f') as HTMLElement).style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + '%'; }
   }
-  /** 口令倒数：屏幕中间的大字，短暂放大后淡出 */
-  count(text: string) {
+  /** 口令倒数（用户 11-08：原来只是一行大字太简陋）：圆形口令牌，数字弹出，外圈每拍走一圈，
+   *  下面三颗拍点；喊到「一」变金色并提示「现在按 E！」，外圈改为按键窗口倒计时。 */
+  count(text: string, beat = -1, win = 0.6) {
     let el = document.getElementById('count');
     if (!el) {
+      const st = document.createElement('style'); st.textContent = `
+#count{position:fixed;left:50%;top:22%;transform:translate(-50%,-50%);z-index:30;pointer-events:none;display:grid;justify-items:center;gap:10px;opacity:0;transition:opacity .25s}
+#count.on{opacity:1}
+#count .disc{position:relative;width:150px;height:150px;display:grid;place-items:center}
+#count svg{position:absolute;inset:0;transform:rotate(-90deg)}
+#count .bg{fill:rgba(246,239,220,.94);stroke:#7a5a32;stroke-width:5}
+#count .ring{fill:none;stroke:#2f5a3e;stroke-width:8;stroke-linecap:round;stroke-dasharray:408;stroke-dashoffset:408}
+#count .num{position:relative;z-index:1;font:800 76px/1 "PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;color:#2f3d2a;text-shadow:0 2px 0 #fff8e4}
+#count .num.pop{animation:cdPop .45s cubic-bezier(.2,1.7,.4,1)}
+@keyframes cdPop{from{transform:scale(1.9);opacity:0}to{transform:scale(1);opacity:1}}
+#count .dots{display:flex;gap:10px}
+#count .dots i{width:14px;height:14px;border-radius:50%;background:rgba(246,239,220,.35);border:2px solid rgba(246,239,220,.8);transition:background .2s,transform .2s}
+#count .dots i.lit{background:#e2b45a;transform:scale(1.15)}
+#count .hint{font:600 17px "PingFang SC","Microsoft YaHei",sans-serif;color:#fff7e0;background:rgba(36,56,43,.82);padding:6px 16px;border-radius:999px;text-shadow:none;letter-spacing:.04em}
+#count .hint kbd{font:800 15px sans-serif;background:#f6efdc;color:#24382b;border-radius:6px;padding:1px 8px;margin:0 3px}
+#count.go .bg{fill:#ffd76a;stroke:#b07a1e}
+#count.go .ring{stroke:#c0392b}
+#count.go .num{color:#5a3200}
+#count.go .disc{animation:cdGo .5s ease-in-out infinite alternate}
+#count.go .hint{background:#c0392b;animation:cdGo .5s ease-in-out infinite alternate}
+@keyframes cdGo{to{transform:scale(1.07)}}
+#count.ok .bg{fill:#9ad08a;stroke:#2f5a3e}
+#count.ok .num{color:#1f4a28}
+#count.miss .bg{fill:#e9d7c0;stroke:#8a6a4a}
+#count.miss .num{color:#8a4a2a;font-size:44px}
+`;
+      document.head.appendChild(st);
       el = document.createElement('div'); el.id = 'count';
-      el.style.cssText = 'position:fixed;left:50%;top:38%;transform:translate(-50%,-50%) scale(1);font:700 96px/1 "PingFang SC","Noto Sans CJK SC",sans-serif;color:#fff7e0;text-shadow:0 4px 18px rgba(60,40,10,.55),0 0 2px #6b4a1a;pointer-events:none;transition:transform .25s ease-out,opacity .6s ease-in;opacity:0;z-index:30';
+      el.innerHTML = '<div class="disc"><svg viewBox="0 0 150 150"><circle class="bg" cx="75" cy="75" r="65"/><circle class="ring" cx="75" cy="75" r="65"/></svg><div class="num"></div></div><div class="dots"><i></i><i></i><i></i></div><div class="hint"></div>';
       document.body.appendChild(el);
     }
-    el.textContent = text; el.style.transition = 'none'; el.style.opacity = '1'; el.style.transform = 'translate(-50%,-50%) scale(1.35)';
-    void el.offsetWidth;
-    el.style.transition = 'transform .25s ease-out, opacity .6s ease-in .35s'; el.style.transform = 'translate(-50%,-50%) scale(1)'; el.style.opacity = '0';
+    const num = el.querySelector('.num') as HTMLElement, ring = el.querySelector('.ring') as SVGCircleElement, hint = el.querySelector('.hint') as HTMLElement;
+    const b = beat >= 0 ? beat : text.startsWith('三') ? 0 : text.startsWith('二') ? 1 : 2;
+    clearTimeout(this.countHide);
+    el.classList.remove('ok', 'miss'); el.classList.toggle('go', b === 2); el.classList.add('on');
+    num.textContent = text.replace(/[—！!]/g, ''); num.classList.remove('pop'); void num.offsetWidth; num.classList.add('pop');
+    el.querySelectorAll('.dots i').forEach((d, i) => d.classList.toggle('lit', i <= b));
+    hint.innerHTML = b === 2 ? '现在按 <kbd>E</kbd>！' : '喊到「一」时按 <kbd>E</kbd>';
+    // 外圈：前两拍各走满一秒；第三拍从满圈缩到空，表示还剩多少按键时间
+    ring.style.transition = 'none'; ring.style.strokeDashoffset = b === 2 ? '0' : '408'; void ring.getBoundingClientRect();
+    ring.style.transition = `stroke-dashoffset ${b === 2 ? win : 1}s linear`; ring.style.strokeDashoffset = b === 2 ? '408' : '0';
   }
+  /** 口令结束：ok 成功（绿色「好！」），miss 失败，空 = 直接收起 */
+  countEnd(result?: 'ok' | 'miss') {
+    const el = document.getElementById('count'); if (!el) return;
+    clearTimeout(this.countHide);
+    if (!result) { el.classList.remove('on'); return; }
+    el.classList.remove('go'); el.classList.add(result);
+    (el.querySelector('.num') as HTMLElement).textContent = result === 'ok' ? '好！' : '再来';
+    (el.querySelector('.hint') as HTMLElement).textContent = result === 'ok' ? '一起动手！' : '没对上节拍';
+    const ring = el.querySelector('.ring') as SVGCircleElement; ring.style.transition = 'none'; ring.style.strokeDashoffset = '408';
+    this.countHide = window.setTimeout(() => el.classList.remove('on'), 900);
+  }
+  private countHide = 0;
   private hudOn = false;
   /** 背包：右下角一排小格子 */
   bag(items: { icon: string; name: string; img?: string }[]) {
