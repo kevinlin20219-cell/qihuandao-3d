@@ -9,18 +9,18 @@ const PAPER_CSS = `
 #intro canvas{position:absolute;inset:0;width:100%;height:100%;display:block;filter:saturate(1.08) contrast(1.04)}
 #intro .pi-grain{position:absolute;inset:0;pointer-events:none;z-index:1;opacity:.32;mix-blend-mode:multiply;background-size:256px 256px}
 #intro .pi-vig{position:absolute;inset:0;pointer-events:none;z-index:2;background:radial-gradient(ellipse 78% 72% at 50% 48%,transparent 58%,rgba(0,0,0,.5))}
-#intro .pi-bar{position:absolute;left:0;right:0;height:8vh;background:#000;z-index:3}
+#intro .pi-bar{position:absolute;left:0;right:0;height:var(--bar,0px);background:#000;z-index:3}
 #intro .pi-bar.t{top:0}#intro .pi-bar.b{bottom:0}
-#intro .pi-cap{position:absolute;left:50%;bottom:calc(8vh + 22px);transform:translateX(-50%);width:min(940px,90vw);text-align:center;font-family:"Kaiti SC","STKaiti","KaiTi","BiauKai",serif;font-size:clamp(16px,2.25vw,26px);line-height:1.75;letter-spacing:.08em;text-shadow:0 2px 12px rgba(0,0,0,.95),0 0 3px #000;opacity:0;transition:opacity .8s;z-index:4}
-#intro .pi-cap.on{opacity:1}#intro .pi-cap.top{bottom:auto;top:calc(8vh + 22px)}
+#intro .pi-cap{position:absolute;left:50%;bottom:calc(var(--bar,0px) + 22px);transform:translateX(-50%);width:min(940px,90vw);text-align:center;font-family:"Kaiti SC","STKaiti","KaiTi","BiauKai",serif;font-size:clamp(16px,2.25vw,26px);line-height:1.75;letter-spacing:.08em;text-shadow:0 2px 12px rgba(0,0,0,.95),0 0 3px #000;opacity:0;transition:opacity .8s;z-index:4}
+#intro .pi-cap.on{opacity:1}#intro .pi-cap.top{bottom:auto;top:calc(var(--bar,0px) + 22px)}
 #intro .pi-btn{position:absolute;z-index:6;appearance:none;border:1px solid rgba(246,239,220,.5);background:rgba(0,0,0,.35);color:#fff6df;border-radius:999px;padding:8px 18px;font:15px inherit;cursor:pointer}
 #intro .pi-btn:hover{background:rgba(0,0,0,.55)}
-#intro .pi-skip{right:16px;top:calc(8vh + 12px)}
-#intro .pi-snd{right:16px;bottom:calc(8vh + 12px);width:42px;height:42px;padding:0;font-size:18px}
-#intro .pi-load{position:absolute;left:50%;bottom:calc(8vh - 30px);transform:translateX(-50%);z-index:5;display:flex;align-items:center;gap:10px;font-size:12px;color:rgba(255,246,223,.75);opacity:.55;transition:opacity .6s}
+#intro .pi-skip{right:16px;top:calc(var(--bar,0px) + 12px)}
+#intro .pi-snd{right:16px;bottom:calc(var(--bar,0px) + 12px);width:42px;height:42px;padding:0;font-size:18px}
+#intro .pi-load{position:absolute;left:50%;bottom:max(10px,calc(var(--bar,0px) - 30px));transform:translateX(-50%);z-index:5;display:flex;align-items:center;gap:10px;font-size:12px;color:rgba(255,246,223,.75);opacity:.55;transition:opacity .6s}
 #intro .pi-load .bar{width:160px;height:4px;border-radius:2px;background:rgba(255,255,255,.18);overflow:hidden}
 #intro .pi-load .bar i{display:block;height:100%;width:0;background:#e2b45a;transition:width .3s}
-#intro.ended .pi-load{opacity:1;bottom:calc(8vh + 26px)}
+#intro.ended .pi-load{opacity:1;bottom:calc(var(--bar,0px) + 26px)}
 `;
 type StartOpts = { start: (resume: boolean) => void; clearSave: () => void };
 const TITLE_CSS = `

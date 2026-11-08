@@ -119,9 +119,11 @@ async function boot() {
   const spotFollow = new URLSearchParams(location.search).get('lightfix') !== '0';
   const washFix = new URLSearchParams(location.search).get('wash') !== '0';
   // v67（用户：人物比环境亮）：原来 13° 的窄光圈像追光只罩住人物；保留聚光，但减半亮度、光圈放宽到约 22°、边缘全柔化（用户：可以聚光，但过头了）
+  const SPOT_LIVE = new URLSearchParams(location.search).get('spotlive') !== '0';
   const SPOT_I = Number(new URLSearchParams(location.search).get('spotI') ?? 1.2), SPOT_A = Number(new URLSearchParams(location.search).get('spotA') ?? 0.38);
   // v38：层次感——暖光不再整片照，改成从左前上方聚光照拱门和路（中景最亮），前景两侧和远处自然暗下去
   const warmSpot = new THREE.SpotLight(0xffb85c, tone2 ? 6.0 : 0, 70, 0.22, 0.85, 0); warmSpot.name = 'warm_spot';
+  if (tone2 && spotFollow && SPOT_LIVE) { warmSpot.color.setHex(0xffe0ad); warmSpot.angle = SPOT_A; warmSpot.penumbra = 1; warmSpot.intensity = 0; scene.add(warmSpot, warmSpot.target); } // 先挂上（亮度 0），预热时就按最终灯数编译
   warmSpot.position.set(-6, 17, 40); warmSpot.target.position.set(0, 0, 20.5); // v41：聚光主要照路面，墙留在半阴影里（对齐原画） scene.add(warmSpot, warmSpot.target);
 
   // 宣传片里穿过树冠的光束：几片沿阳光方向斜放的加色半透明面，跟着玩家所在的格子走
@@ -331,6 +333,20 @@ async function boot() {
     } catch (e) { console.warn('warm', e); }
     objs.forEach((o, i) => (o.visible = vis[i])); warmStats.ms += performance.now() - t0;
   }
+  // 用户 11-09（公网版走到巨石坡明显卡一下）：逐批预热之后，合批、叶片材质克隆、树冠关阴影、加密植被、接触暗斑都会换出新的着色器，
+  // 第一次进视野才同步编译。在这些都做完后把整个场景再预热一遍（已编译过的着色器会直接跳过），贴图分帧上传。?warmall=0 关闭
+  const warmAllStats = { runs: 0, programs: 0, textures: 0, ms: 0 };
+  async function warmScene(tag: string) {
+    if (params.get('warmall') === '0' || params.get('warm') === '0') return;
+    const t0 = performance.now(), p0 = renderer.info.programs?.length ?? 0;
+    try {
+      await renderer.compileAsync(scene, camera);
+      const tex = new Set<THREE.Texture>();
+      scene.traverse((m: any) => { for (const mt of [].concat(m.material ?? [])) for (const v of Object.values(mt as object)) if ((v as THREE.Texture)?.isTexture) tex.add(v as THREE.Texture); });
+      let n = 0; for (const t of tex) { if (!(renderer.properties.get(t) as any).__webglTexture) { renderer.initTexture(t); warmAllStats.textures++; if (++n % 4 === 0) await new Promise((r) => requestAnimationFrame(r)); } }
+    } catch (e) { console.warn('warmScene', tag, e); }
+    warmAllStats.runs++; warmAllStats.programs += (renderer.info.programs?.length ?? 0) - p0; warmAllStats.ms += performance.now() - t0;
+  }
   let farL: { obj: THREE.Object3D; hideBelow: number }[] = [];
   let environmentBatchHandle: ReturnType<typeof batchStaticEnvironment> | null = null;
   let zones: { update(dt: number, z: number): void; stats: object } | null = null;
@@ -427,13 +443,14 @@ async function boot() {
     // 地面草、蕨、灌木照旧接收。必须在合批前设置（合批按 receiveShadow 分组）。?leafshadow=1 恢复
     /* v96 恢复 v94：树冠默认不接收阴影，?leafshadow=1 恢复接收 */ if (params.get('leafshadow') !== '1') { let n = 0; scene.traverse((o: any) => { if (o.isMesh && o.receiveShadow && /crown|canopy|foliage|spray|lobe|leaves|leaf_card|treewall|tree_.*leaf/i.test(o.name) && !/COL_|MK_|bark|trunk|root|stem|litter|fallen|vine_leaf|grass|fern|bush|herb/i.test(o.name)) { o.receiveShadow = false; n++; } }); (window as any).__qhd.leafNoRecv = n; }
     // 0310 第 7 项：石头脚下的接触暗斑（合批前收集，物理碰撞就绪后摆放）
-    if (params.get('contact') !== '0') { const cb = collectContactBlobs(scene); setTimeout(() => { try { (window as any).__qhd.contact = cb.finish((f, d, m) => game.ph.ray(f, d, m)).stats; } catch (e) { console.warn('contact', e); } }, 1500); }
+    if (params.get('contact') !== '0') { const cb = collectContactBlobs(scene); setTimeout(() => { try { (window as any).__qhd.contact = cb.finish((f, d, m) => game.ph.ray(f, d, m)).stats; void warmScene('contact'); } catch (e) { console.warn('contact', e); } }, 1500); }
     if (params.get('render_batches') !== '0') { const h = (renderer.extensions.has('WEBGL_multi_draw') && params.get('render_multidraw') !== '0' ? batchMultiDrawEnvironment : batchStaticEnvironment)(THREE, scene, farL); environmentBatchHandle = h; (window as any).__qhd.environmentBatches = h.stats; cinematicFoliage.refresh(); if (params.get('warm') !== '0' && h.groups?.length) void warmObjects(h.groups); }
-    intro.envReady(); clearInterval(progTimer);
+    void warmScene('batched').finally(() => { intro.envReady(); clearInterval(progTimer); });
     if (new URLSearchParams(location.search).get('zone') !== '0') import('./scene_manifest').then(({ makeZoneCuller, farIdSet }) => { zones = makeZoneCuller(scene, farIdSet); (window as any).__qhd.zones = zones.stats; });
     if (tone2 && new URLSearchParams(location.search).get('dense') !== '0' && !/botanical/.test(envMan || '')) setTimeout(() => Promise.all([import('./atmosphere'), import('./codex/v49_art_compat')]).then(([{ densifyPlants }, { shouldSkipDensePlant }]) => { // v49：路边植被加密（等新碰撞进物理查询后再贴地）；0179：跳过新模型已铺植物的区域，避开桥头机关岗位
       const L = game.level, avoid = [...L.lures, ...L.gate.pads, ...L.pads, L.deerState.calmPad].map((p) => p.pos.clone());
       (window as any).__qhd.dense = densifyPlants(scene, (f, d, m) => game.ph.ray(f, d, m), avoid, 120000, shouldSkipDensePlant, /landscape_v([3-9]|\d\d)/.test(envMan || '') ? ['slope', 'bridgehead', 'glade'] : []);
+      void warmScene('dense');
     }), 1200);
     // v54：门后到岔路口（z −1…8.6）和庭院还剩的旧灰盒尖锥草 / 灰盒花 / 低模树冠整组收起（新模型都已铺到），?gray_veg=1 恢复
     if (new URLSearchParams(location.search).get('gray_veg') !== '1') {
@@ -571,7 +588,7 @@ async function boot() {
   };
 
   // 调试与自动测试接口
-  (window as any).__qhd = { warm: warmStats, game, cam, ph, renderer, scene, composer, warmFront, warmSpot, camera, fill, rim, sun, get playing() { return playing; }, get paused() { return paused; }, fps: 0, frameMs: 0, squad: CHAPTER1_SQUAD, RC: THREE.Raycaster };
+  (window as any).__qhd = { warm: warmStats, warmAll: warmAllStats, game, cam, ph, renderer, scene, composer, warmFront, warmSpot, camera, fill, rim, sun, get playing() { return playing; }, get paused() { return paused; }, fps: 0, frameMs: 0, squad: CHAPTER1_SQUAD, RC: THREE.Raycaster };
 
   // QA uses the same pixel-ratio and bloom paths as URL presets, without reloading.
   if (params.get('qa_memory') === '1') (window as any).__qhd.setQualityForReview = (quality: string, reviewPixelRatio?: number) => {
@@ -710,7 +727,10 @@ async function boot() {
     const lp = lead.pos;
     { const o = warmFront.userData.off as number[]; warmFront.position.set(lp.x + o[0], lp.y + o[1], lp.z + o[2]); warmFront.target.position.copy(lp); }
     // v60（Codex 0207/0213）：入口之后（z<-2）暖聚光跟着领队照中景路面；入口保持原样（原聚光本来就没挂进场景）
-    if (tone2 && spotFollow) { const on = lp.z < -2; if (on && !warmSpot.parent) { warmSpot.color.setHex(0xffe0ad); warmSpot.intensity = SPOT_I; warmSpot.angle = SPOT_A; warmSpot.penumbra = 1; scene.add(warmSpot, warmSpot.target); } if (!on && warmSpot.parent) scene.remove(warmSpot, warmSpot.target);
+    // 用户 11-09（公网版走到巨石坡明显卡一下）：原来过 z=-2 时才把聚光挂进场景，灯的数量一变，视野里所有材质（实测 114 个着色器）当场重编。
+    // 改为一开始就挂着、入口前亮度为 0（这盏灯不投影，画面不变），只改亮度不改灯数。?spotlive=0 恢复旧做法
+    if (tone2 && spotFollow) { const on = lp.z < -2; if (SPOT_LIVE && !warmSpot.parent) { warmSpot.color.setHex(0xffe0ad); warmSpot.angle = SPOT_A; warmSpot.penumbra = 1; warmSpot.intensity = 0; scene.add(warmSpot, warmSpot.target); } if (SPOT_LIVE) warmSpot.intensity = on ? SPOT_I : 0;
+      else { if (on && !warmSpot.parent) { warmSpot.color.setHex(0xffe0ad); warmSpot.intensity = SPOT_I; warmSpot.angle = SPOT_A; warmSpot.penumbra = 1; scene.add(warmSpot, warmSpot.target); } if (!on && warmSpot.parent) scene.remove(warmSpot, warmSpot.target); }
       if (on) { warmSpot.position.set(lp.x - 6, lp.y + 17, lp.z + 12); warmSpot.target.position.set(lp.x, lp.y + 0.1, lp.z - 7); } }
     const sunOff = (window as any).__qhd?.sunOff as number[] | undefined; // 调光用：临时改太阳方向
     if (sunOff) sun.position.set(lp.x + sunOff[0], lp.y + sunOff[1], lp.z + sunOff[2]);

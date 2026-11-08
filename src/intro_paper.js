@@ -19,7 +19,10 @@ let DPR = 1, view = { s: 1, ox: 0, oy: 0 };
 function resize() {
   DPR = Math.min(2, devicePixelRatio || 1);
   cv.width = innerWidth * DPR; cv.height = innerHeight * DPR;
-  const s = Math.max(innerWidth / W, innerHeight / H);
+  // 用户 11-09（手机宽屏上下被切）：整幅 1600×900 完整放进屏幕。宽屏按高度放，两侧用画布外延（每边 200）补；
+  // 超宽屏（宽高比 > 2.22）才轻微裁上下；窄屏按宽度放，上下留黑边。黑边高度写进 --bar，字幕和按钮跟着它走
+  const s = Math.max(Math.min(innerWidth / W, innerHeight / H), innerWidth / (W + 400));
+  if (cv.parentElement) cv.parentElement.style.setProperty('--bar', Math.max(0, (innerHeight - H * s) / 2) + 'px');
   view = { s: s * DPR, ox: (innerWidth * DPR - W * s * DPR) / 2, oy: (innerHeight * DPR - H * s * DPR) / 2 };
 }
 addEventListener('resize', resize); resize();
