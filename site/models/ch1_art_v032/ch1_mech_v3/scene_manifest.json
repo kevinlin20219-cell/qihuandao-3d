@@ -1,0 +1,68 @@
+{
+  "batch": "ch1_mech_v3",
+  "chapter": 1,
+  "items": [
+    {
+      "id": "ch1_boulder_v001",
+      "glb": "../shared/b0afb76f47bb_boulder_natural_planes_ba4a78c9796c.json",
+      "kind": "mech",
+      "mech": "boulder",
+      "sha256": "da61a4714ee377254b73d0e4941c76aa02b8d2a5349cb70d370c5125dd55eaf7"
+    },
+    {
+      "id": "ch1_plate_v001",
+      "glb": "../shared/8603312254d8_prop_mechanism_plate_v004.json",
+      "kind": "mech",
+      "mech": "plate",
+      "sha256": "15c420bcb3f5bffdbf4cbbfc1441b47069620de94a04ae55b785e028b27c0ad4"
+    },
+    {
+      "id": "ch1_winch_v001",
+      "glb": "../shared/2de7ee1df664_prop_winch_v004.json",
+      "kind": "mech",
+      "mech": "winch",
+      "place": [
+        {
+          "pos": [
+            -5,
+            1.5,
+            -46.9
+          ]
+        }
+      ],
+      "sha256": "f6d5aab6777990090ebea21341b1b53c227985a2c97caf141c2c15ad71a86c5e"
+    },
+    {
+      "id": "ch1_counterweight_v001",
+      "glb": "../shared/9a8cf7a13141_prop_counterweight_v004.json",
+      "kind": "mech",
+      "mech": "counterweight",
+      "place": [
+        {
+          "pos": [
+            5,
+            1.5,
+            -46.9
+          ]
+        }
+      ],
+      "sha256": "b858bcd13f3e351da681bc44bd9ded89568a5d7540c1a3ea4ca16ca0e2a57897"
+    },
+    {
+      "id": "ch1_ropeclip_v001",
+      "glb": "../shared/f3aa2d1a1ea0_prop_ropeclip_v004.json",
+      "kind": "mech",
+      "mech": "ropeclip",
+      "place": [
+        {
+          "pos": [
+            2,
+            2.4,
+            -49.3
+          ]
+        }
+      ],
+      "sha256": "c02e8173903d2d25f4f2b1927d7850eeb6c37ad5f1b559e71dfc8cfa7806a868"
+    }
+  ]
+}

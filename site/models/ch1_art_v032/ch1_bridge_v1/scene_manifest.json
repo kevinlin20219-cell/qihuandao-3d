@@ -1,0 +1,21 @@
+{
+  "batch": "ch1_bridge_v1",
+  "chapter": 1,
+  "items": [
+    {
+      "id": "ch1_rope_bridge_v001",
+      "glb": "../shared/38724a48cc86_prop_ch1_rope_bridge_v004.json",
+      "sha256": "0609a132db32280b97d108afb173a4345ad80764d0dc5d17493509dba53cebf9",
+      "kind": "bridge",
+      "place": [
+        {
+          "pos": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}
