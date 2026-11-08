@@ -31,6 +31,8 @@ const $ = (id: string) => document.getElementById(id)!;
 async function boot() {
   // 入口简介和开场动画先出来，动画放着的时候继续往下加载（用户 11-08）
   const intro = setupIntro();
+  // 开场动画一开始就放背景音乐（点按钮是用户手势，浏览器允许出声）；进游戏时直接沿用这一个
+  intro.onBegin(() => { if (new URLSearchParams(location.search).get('music') === '0') return; try { const m = new Music(); m.resume(); (window as any).__qhdEarlyMusic = m; } catch (e) { console.warn('音乐无法启动', e); } });
   let bootStage = 0.05; intro.setProgress(0.03, '正在准备角色');
   const progTimer = setInterval(() => { const mp = (window as any).__qhdManifestProgress as { done: number; total: number } | undefined; const env = mp && mp.total ? mp.done / Math.max(mp.total, 150) : 0; intro.setProgress(0.3 * bootStage + 0.7 * env, env > 0 ? '正在布置森林' : '正在准备角色'); }, 300);
   const view = $('view');
@@ -493,6 +495,7 @@ async function boot() {
   addEventListener('keydown', (e) => { if (e.code === 'KeyM' && music && playing) ui.toast(music.toggle() ? '音乐：开（M 关闭）' : '音乐：关（M 打开）', 1.6); });
   function start(resume: boolean) {
     $('title').hidden = true;
+    if (!music && (window as any).__qhdEarlyMusic) music = (window as any).__qhdEarlyMusic;
     if (!music && new URLSearchParams(location.search).get('music') !== '0') { try { music = new Music(); } catch (e) { console.warn('音乐无法启动', e); } }
     music?.resume();
     if (!voice && new URLSearchParams(location.search).get('voice') === 'babble') { try { voice = new Voice(); /* 用户 11-03：卡通咿呀声不合适，默认不用，只留 ?voice=babble 备查 */ } catch (e) { console.warn('说话声无法启动', e); } }
