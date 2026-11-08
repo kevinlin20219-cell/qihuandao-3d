@@ -424,8 +424,8 @@ async function boot() {
         (window as any).__qhd.grayFloors = slabs.length;
       } }
     // 0316（用户 Windows 截图）：树冠满是黑色碎斑——薄叶片卡在自己身上算阴影（阴影噪点）。树冠叶片不接收阴影（仍投影），
-    // 地面草、蕨、灌木照旧接收。必须在合批前设置（合批按 receiveShadow 分组）。?leafshadow=1 恢复
-    if (params.get('leafshadow') !== '1') { let n = 0; scene.traverse((o: any) => { if (o.isMesh && o.receiveShadow && /crown|canopy|foliage|spray|lobe|leaves|leaf_card|treewall|tree_.*leaf/i.test(o.name) && !/COL_|MK_|bark|trunk|root|stem|litter|fallen|vine_leaf|grass|fern|bush|herb/i.test(o.name)) { o.receiveShadow = false; n++; } }); (window as any).__qhd.leafNoRecv = n; }
+    // 地面草、蕨、灌木照旧接收。必须在合批前设置（合批按 receiveShadow 分组）。v95 起默认接收（回滚），?leafshadow=0 关闭
+    /* v95 回滚：默认恢复树冠接收阴影，?leafshadow=0 才关 */ if (params.get('leafshadow') === '0') { let n = 0; scene.traverse((o: any) => { if (o.isMesh && o.receiveShadow && /crown|canopy|foliage|spray|lobe|leaves|leaf_card|treewall|tree_.*leaf/i.test(o.name) && !/COL_|MK_|bark|trunk|root|stem|litter|fallen|vine_leaf|grass|fern|bush|herb/i.test(o.name)) { o.receiveShadow = false; n++; } }); (window as any).__qhd.leafNoRecv = n; }
     // 0310 第 7 项：石头脚下的接触暗斑（合批前收集，物理碰撞就绪后摆放）
     if (params.get('contact') !== '0') { const cb = collectContactBlobs(scene); setTimeout(() => { try { (window as any).__qhd.contact = cb.finish((f, d, m) => game.ph.ray(f, d, m)).stats; } catch (e) { console.warn('contact', e); } }, 1500); }
     if (params.get('render_batches') !== '0') { const h = (renderer.extensions.has('WEBGL_multi_draw') && params.get('render_multidraw') !== '0' ? batchMultiDrawEnvironment : batchStaticEnvironment)(THREE, scene, farL); environmentBatchHandle = h; (window as any).__qhd.environmentBatches = h.stats; cinematicFoliage.refresh(); if (params.get('warm') !== '0' && h.groups?.length) void warmObjects(h.groups); }

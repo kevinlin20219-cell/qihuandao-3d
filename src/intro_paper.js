@@ -3,7 +3,7 @@
 // @ts-nocheck
 // 页面一打开就先把旁白文件取下来（不需要用户点击）
 const PREF = {};
-export function prefetchIntroVoice(base) { for (let i = 1; i <= 10; i++) { const id = String(i).padStart(2, '0'); if (!PREF[id]) PREF[id] = fetch(base + 'intro_' + id + '.mp3').then((r) => r.ok ? r.arrayBuffer() : null).catch(() => null); } }
+export function prefetchIntroVoice(base) { for (let i = 1; i <= 9; i++) { const id = String(i).padStart(2, '0'); if (!PREF[id]) PREF[id] = fetch(base + 'intro_' + id + '.mp3').then((r) => r.ok ? r.arrayBuffer() : null).catch(() => null); } }
 export function mountPaperIntro(root, OPTS) {
 OPTS = Object.assign({ prefetched: PREF }, OPTS);
 const $ = (id) => root.querySelector('.pi-' + id);
@@ -267,7 +267,7 @@ function setMuted(m) { muted = m; const b = $('snd'); if (b) b.textContent = mut
 { const b = $('snd'); if (b) { b.textContent = muted ? '🔇' : '🔊'; b.onclick = (e) => { e.stopPropagation(); setMuted(!muted); }; } }
 // ---------- 旁白（Codex 交付 20261108_intro_narration_selected_v001，用户选定的第一版温柔故事旁白） ----------
 // 每条文件前后各有 0.2 秒静音；按每幕实际时长同步，不加速。旁白期间音乐压到 30%。
-const VOICE = OPTS.voice === false ? [] : ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10'];
+const VOICE = OPTS.voice === false ? [] : ['01', '02', '03', '04', '05', '06', '07', '08', '09'];  // 用户 11-08：章名「第一章…」不念，以后各章也不念
 const vbuf = {}, vraw = {}; let vsrc = [], vdecoding = false;
 // 先把文件取下来（不需要声音环境），用户点了按钮、有了 AudioContext 再解码
 for (const id of VOICE) vraw[id] = (OPTS.prefetched && OPTS.prefetched[id]) || fetch((OPTS.audioBase || 'audio/') + 'intro_' + id + '.mp3').then((r) => r.ok ? r.arrayBuffer() : Promise.reject(r.status)).catch((e) => { console.warn('旁白加载失败', id, e); return null; });
@@ -650,8 +650,8 @@ const SCENES = [
   { id: 'eight', dur: 7, top: true, tr: 'rise', v: [['07', 0.9]], text: '这个夏天，八个好朋友，来到了奇幻岛。', draw: drawBeach2 },
   { id: 'goal', dur: 7, tr: 'tear', v: [['08', 0.5]], text: '他们要一起穿过森林、河流和浓雾，把光之叶重新点亮。', draw: (t, lt, d) => drawGoal2(t, lt, d, false) },
 ];
-// 片名卡：0.9 秒落下时念「奇幻岛」，3.5 秒翻成章名时念「第一章，吊桥重新相连」
-const TITLE_V = [['09', 0.8], ['10', 3.45]];
+// 片名卡：0.9 秒落下时念「奇幻岛」；翻成章名时不念（用户 11-08）
+const TITLE_V = [['09', 0.8]];
 const TITLE = 6.6, XF = 1.1;
 const starts = []; { let a = 0; for (const s of SCENES) { starts.push(a); a += s.dur; } }
 const ENDT = starts[starts.length - 1] + SCENES[SCENES.length - 1].dur, TOTAL = ENDT + TITLE;

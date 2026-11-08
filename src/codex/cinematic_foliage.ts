@@ -7,6 +7,8 @@
 export function createCinematicFoliageFade(root) {
   const enabled = { value: 0 }, follow = { value: 0 }, targetDepth = { value: 0 }, clones = new WeakMap(), seen = new WeakSet();
   const stats = { meshes: 0, materials: 0 };
+  // v95（用户 11-08：树叶越改越差，回滚到调整前）：近处树叶淡出默认关闭，?leafnear=1 打开
+  const nearFade = { value: new URLSearchParams(location.search).get('leafnear') === '1' ? 1 : 0 };
   function refresh() {
     root.traverse(mesh => {
       if (!mesh.isMesh || mesh.isSkinnedMesh || seen.has(mesh) || !/foliage|leaf|fern|grass|bush|broadleaf|crown_sprays|crown_lobes|soft_layered_crown/i.test(mesh.name) || /COL_|MK_|bark|trunk|root|stem/i.test(mesh.name)) return;
@@ -23,12 +25,13 @@ export function createCinematicFoliageFade(root) {
           shader.uniforms.uCinematicLeafFade = enabled;
           shader.uniforms.uFollowLeafFade = follow;
           shader.uniforms.uFollowTargetDepth = targetDepth;
+          shader.uniforms.uFollowNearFade = nearFade;
           shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying float vCinematicLeafDepth;\nvarying vec3 vFoliageViewPosition;')
             .replace('#include <project_vertex>', '#include <project_vertex>\nvCinematicLeafDepth = -mvPosition.z;\nvFoliageViewPosition = mvPosition.xyz;');
-          shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vCinematicLeafDepth;\nvarying vec3 vFoliageViewPosition;\nuniform float uCinematicLeafFade;\nuniform float uFollowLeafFade;\nuniform float uFollowTargetDepth;')
-            .replace('#include <alphatest_fragment>', 'if (uFollowLeafFade > 0.5 && vCinematicLeafDepth > 0.02 && vCinematicLeafDepth < uFollowTargetDepth - 0.25) {\n  vec2 projected = vFoliageViewPosition.xy * (uFollowTargetDepth / vCinematicLeafDepth);\n  float bodyY = clamp(projected.y, -1.2, 0.18);\n  float edge = length(vec2(projected.x, projected.y - bodyY));\n  float cut = 1.0 - smoothstep(0.36, 0.72, edge);\n  float dither = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);\n  if (cut > dither) discard;\n}\nif (uFollowLeafFade > 0.5) {\n  float nearCut = 1.0 - smoothstep(1.3, 2.6, vCinematicLeafDepth);\n  float dn = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);\n  if (nearCut > dn) discard;\n}\ndiffuseColor.a *= mix(1.0, smoothstep(2.0, 4.0, vCinematicLeafDepth), uCinematicLeafFade);\n#include <alphatest_fragment>');
+          shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vCinematicLeafDepth;\nvarying vec3 vFoliageViewPosition;\nuniform float uCinematicLeafFade;\nuniform float uFollowLeafFade;\nuniform float uFollowTargetDepth;\nuniform float uFollowNearFade;')
+            .replace('#include <alphatest_fragment>', 'if (uFollowLeafFade > 0.5 && vCinematicLeafDepth > 0.02 && vCinematicLeafDepth < uFollowTargetDepth - 0.25) {\n  vec2 projected = vFoliageViewPosition.xy * (uFollowTargetDepth / vCinematicLeafDepth);\n  float bodyY = clamp(projected.y, -1.2, 0.18);\n  float edge = length(vec2(projected.x, projected.y - bodyY));\n  float cut = 1.0 - smoothstep(0.36, 0.72, edge);\n  float dither = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);\n  if (cut > dither) discard;\n}\nif (uFollowLeafFade > 0.5 && uFollowNearFade > 0.5) {\n  float nearCut = 1.0 - smoothstep(1.3, 2.6, vCinematicLeafDepth);\n  float dn = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);\n  if (nearCut > dn) discard;\n}\ndiffuseColor.a *= mix(1.0, smoothstep(2.0, 4.0, vCinematicLeafDepth), uCinematicLeafFade);\n#include <alphatest_fragment>');
         };
-        material.customProgramCacheKey = () => key() + '_cinematicLeaf_v3_follow_near';
+        material.customProgramCacheKey = () => key() + '_cinematicLeaf_v4_follow_near_opt';
         material.needsUpdate = true;
         clones.set(original, material); clones.set(material, material); stats.materials++;
         return material;
