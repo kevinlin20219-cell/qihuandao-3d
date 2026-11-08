@@ -222,6 +222,7 @@ async function boot() {
 
   // 资产接入：?model_<角色id>=<GLB 地址> 用交付的模型替换该角色的灰盒外观（QA 用）
   const params = new URLSearchParams(location.search);
+  let fpsCap = 60; try { const v = Number(localStorage.getItem('qhd_fpscap') ?? params.get('fpscap') ?? 60); if ([0, 30, 60].includes(v)) fpsCap = v; } catch { /* */ }
   // 发布版可以在页面里写 window.__DEFAULT_MODELS = { tangtuan: 'models/x.glb', anim_hanhan: 'tangtuan', ... }，地址里没有 model_ 参数时使用；?gray=1 强制灰盒
   const defaults = (window as any).__DEFAULT_MODELS as Record<string, string> | undefined;
   if (defaults && !params.has('gray') && ![...params.keys()].some((k) => k.startsWith('model_'))) {
@@ -308,10 +309,25 @@ async function boot() {
     (window as any).__qhd.wind = { time: windTime, stats: windStats };
     if (tone2 && new URLSearchParams(location.search).get('life') !== '0') import('./life').then(({ createLife }) => { life = createLife(scene, windTime, (params.get('butterflies') || '').split(',').filter(Boolean)); }); // v54：蝴蝶 / 浮尘 / 落叶 / 萤火
   });
+  // 0310：新放进场景的模型先隐藏，异步编译着色器（KHR_parallel_shader_compile）并分帧上传贴图，好了再显示。
+  // Windows 实测：边走边加载时每来一批模型主线程同步编译+传贴图，进门后卡顿、石头先出黑色轮廓。?warm=0 关闭
+  const warmStats = { items: 0, textures: 0, ms: 0 };
+  async function warmObjects(objs: THREE.Object3D[]) {
+    const t0 = performance.now(); const vis = objs.map((o) => o.visible); objs.forEach((o) => (o.visible = false));
+    try {
+      await Promise.all(objs.map((o) => renderer.compileAsync(o, camera, scene)));
+      const tex = new Set<THREE.Texture>();
+      for (const o of objs) o.traverse((m: any) => { for (const mt of [].concat(m.material ?? [])) for (const v of Object.values(mt as object)) if ((v as THREE.Texture)?.isTexture) tex.add(v as THREE.Texture); });
+      let n = 0; for (const t of tex) { renderer.initTexture(t); if (++n % 4 === 0) await new Promise((r) => requestAnimationFrame(r)); }
+      warmStats.textures += tex.size; warmStats.items++;
+    } catch (e) { console.warn('warm', e); }
+    objs.forEach((o, i) => (o.visible = vis[i])); warmStats.ms += performance.now() - t0;
+  }
   let farL: { obj: THREE.Object3D; hideBelow: number }[] = [];
   let environmentBatchHandle: ReturnType<typeof batchStaticEnvironment> | null = null;
   let zones: { update(dt: number, z: number): void; stats: object } | null = null;
-  if (envMan) import('./scene_manifest').then(async ({ applyManifest, windTime, farLayers }) => { windT = windTime; farL = farLayers; const all = []; for (const u of envMan.split(',')) all.push(...await applyManifest(game.level, scene, u, game.ph)); return all; }).then((rep) => {
+  if (envMan) import('./scene_manifest').then(async ({ applyManifest, windTime, farLayers, setWarmup }) => { windT = windTime; farL = farLayers;
+    if (params.get('warm') !== '0') setWarmup(warmObjects); const all = []; for (const u of envMan.split(',')) all.push(...await applyManifest(game.level, scene, u, game.ph)); return all; }).then((rep) => {
     (window as any).__qhd.manifest = rep;
     cinematicFoliage.refresh();
     deerContactShade = installDeerContactShade(THREE, scene);
@@ -399,7 +415,7 @@ async function boot() {
         }
         (window as any).__qhd.grayFloors = slabs.length;
       } }
-    if (params.get('render_batches') !== '0') { const h = (renderer.extensions.has('WEBGL_multi_draw') && params.get('render_multidraw') !== '0' ? batchMultiDrawEnvironment : batchStaticEnvironment)(THREE, scene, farL); environmentBatchHandle = h; (window as any).__qhd.environmentBatches = h.stats; cinematicFoliage.refresh(); }
+    if (params.get('render_batches') !== '0') { const h = (renderer.extensions.has('WEBGL_multi_draw') && params.get('render_multidraw') !== '0' ? batchMultiDrawEnvironment : batchStaticEnvironment)(THREE, scene, farL); environmentBatchHandle = h; (window as any).__qhd.environmentBatches = h.stats; cinematicFoliage.refresh(); if (params.get('warm') !== '0' && h.groups?.length) void warmObjects(h.groups); }
     if (new URLSearchParams(location.search).get('zone') !== '0') import('./scene_manifest').then(({ makeZoneCuller, farIdSet }) => { zones = makeZoneCuller(scene, farIdSet); (window as any).__qhd.zones = zones.stats; });
     if (tone2 && new URLSearchParams(location.search).get('dense') !== '0' && !/botanical/.test(envMan || '')) setTimeout(() => Promise.all([import('./atmosphere'), import('./codex/v49_art_compat')]).then(([{ densifyPlants }, { shouldSkipDensePlant }]) => { // v49：路边植被加密（等新碰撞进物理查询后再贴地）；0179：跳过新模型已铺植物的区域，避开桥头机关岗位
       const L = game.level, avoid = [...L.lures, ...L.gate.pads, ...L.pads, L.deerState.calmPad].map((p) => p.pos.clone());
@@ -513,6 +529,13 @@ async function boot() {
     const paint = () => btns.forEach(([v, b]) => { b.className = Math.abs(v - windScale.value) < 1e-6 ? '' : 'ghost'; });
     paint();
   });
+  // 0310：帧率上限（用户 11-08：笔记本发烫）。高刷屏上不限帧会跑到 120/144 帧，默认限 60；省电 30。localStorage qhd_fpscap
+  { const row = document.createElement('div'); row.className = 'row'; row.style.cssText = 'align-items:center;gap:6px;margin-top:8px;font-size:14px';
+    row.innerHTML = '<span style="margin-right:4px">帧率</span>'; $('windRow').after(row);
+    const opts: [number, string][] = [[30, '省电 30'], [60, '60'], [0, '不限']];
+    const btns = opts.map(([v, n]) => { const b = document.createElement('button'); b.textContent = n; b.style.cssText = 'padding:4px 12px;font-size:14px';
+      b.onclick = () => { fpsCap = v; try { localStorage.setItem('qhd_fpscap', String(v)); } catch { /* */ } paint(); }; row.appendChild(b); return [v, b] as const; });
+    const paint = () => btns.forEach(([v, b]) => { b.className = v === fpsCap ? '' : 'ghost'; }); paint(); }
   $('restart').addEventListener('click', () => { game.clearSave(); location.reload(); });
   $('again').addEventListener('click', () => { game.clearSave(); location.reload(); });
   addEventListener('keydown', (e) => { if (e.code === 'Escape') setPaused(!paused); });
@@ -528,7 +551,7 @@ async function boot() {
   };
 
   // 调试与自动测试接口
-  (window as any).__qhd = { game, cam, ph, renderer, scene, composer, warmFront, warmSpot, camera, fill, rim, sun, get playing() { return playing; }, get paused() { return paused; }, fps: 0, frameMs: 0, squad: CHAPTER1_SQUAD, RC: THREE.Raycaster };
+  (window as any).__qhd = { warm: warmStats, game, cam, ph, renderer, scene, composer, warmFront, warmSpot, camera, fill, rim, sun, get playing() { return playing; }, get paused() { return paused; }, fps: 0, frameMs: 0, squad: CHAPTER1_SQUAD, RC: THREE.Raycaster };
 
   // QA uses the same pixel-ratio and bloom paths as URL presets, without reloading.
   if (params.get('qa_memory') === '1') (window as any).__qhd.setQualityForReview = (quality: string, reviewPixelRatio?: number) => {
@@ -552,7 +575,9 @@ async function boot() {
   const cameraAssistInfo = { offset: 0, choice: 0, probes: 0, hits: [] as string[], ranges: {} as Record<string, any> };
   let cameraSolidsReady = false;
   const cameraProbeDir = new THREE.Vector3();
-  function frame() {
+  let capLast = 0;
+  function frame(now = performance.now()) {
+    if (fpsCap > 0) { if (now - capLast < 1000 / fpsCap - 2) { requestAnimationFrame(frame); return; } capLast = now; }
     const userOrbit = Math.abs(input.mouseDX) + Math.abs(input.mouseDY) > 0 || input.wheel !== 0;
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 0.1);
@@ -563,7 +588,7 @@ async function boot() {
       if (fpsEl) fpsEl.textContent = `${Math.round(fps)} 帧/秒 · 分辨率 ×${prNow} · ${renderer.info.render.calls} 次绘制 · ${Math.round(renderer.info.render.triangles / 1000)}k 面` + ((performance as any).memory ? ` · 内存 ${Math.round((performance as any).memory.usedJSHeapSize / 1048576)} MB` : '');
       // 画质自动调节（目标：Windows 轻薄本集成显卡稳定 50 帧以上）：连续 2 秒低于 45 帧就降渲染分辨率，连续 8 秒高于 58 帧再升回去
       if (autoQ && playing && !paused) {
-        if (fps < 45) { lowN++; highN = 0; } else if (fps > 58) { highN++; lowN = 0; } else { lowN = 0; highN = 0; }
+        const tg = fpsCap || 60; if (fps < tg * 0.75) { lowN++; highN = 0; } else if (fps > tg * 0.96) { highN++; lowN = 0; } else { lowN = 0; highN = 0; }
         const i = PR_STEPS.indexOf(prNow);
         if (lowN >= 2 && i < PR_STEPS.length - 1) { prNow = PR_STEPS[i + 1]; renderer.setPixelRatio(prNow); composer.setPixelRatio(prNow); lowN = 0; }
         else if (highN >= 8 && i > 0) { prNow = PR_STEPS[i - 1]; renderer.setPixelRatio(prNow); composer.setPixelRatio(prNow); highN = 0; }

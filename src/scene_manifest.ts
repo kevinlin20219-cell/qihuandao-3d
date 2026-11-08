@@ -229,6 +229,9 @@ export function setVineProgress(level: Level, progress: number) {
 }
 
 // v56（0189）：同一个植物 GLB 在多个区域清单里重复出现：只下载 / 解码一次，之后克隆（几何、材质、贴图共用）
+/** 0310：每个清单项放进场景后先异步编译着色器、上传贴图，再显示（Windows 实测进门卡顿、石头黑轮廓）。main 里设置 */
+let warmup: ((objs: THREE.Object3D[]) => Promise<void>) | null = null;
+export function setWarmup(f: typeof warmup) { warmup = f; }
 const glbCache = new Map<string, Promise<Awaited<ReturnType<typeof loadGLB>>>>();
 async function loadShared(url: string) {
   const p = glbCache.get(url);
@@ -269,7 +272,14 @@ export async function applyManifest(level: Level, scene: THREE.Scene, url: strin
   for (const [id, path] of Object.entries(man.icons ?? {})) if (ITEMS[id as ItemId]) ITEMS[id as ItemId].img = new URL(path, base).href;
   const reports: ItemReport[] = [];
   const box = new THREE.Box3(), c = new THREE.Vector3();
-  for (const it of man.items) {
+  const urlOf = (it: ManifestItem) => new URL(it.glb, base).href;
+  const prefetch = (k: number) => { const it = man.items[k]; if (!it || (it.kind && it.kind !== 'static') || (Array.isArray(it.place) && !it.place.length)) return; const u = urlOf(it); if (!glbCache.has(u)) { const q = loadGLB(u); q.catch(() => glbCache.delete(u)); glbCache.set(u, q); } };
+  for (let k = 0; k < man.items.length; k++) {
+    const it = man.items[k];
+    for (let j = 1; j <= 3; j++) prefetch(k + j); // 0310：后面几项先并行下载解码，公网上逐个等太慢
+    const before = new Set(scene.children);
+    // 清单里写了 place: [] 表示"这一项不摆"（如 v10 撤掉的 tree_depth_shrub）；不能退回到原点摆一份，否则会在路口中间冒出一棵树
+    if (Array.isArray(it.place) && it.place.length === 0 && (!it.kind || it.kind === 'static')) { reports.push({ id: it.id, ok: true, instances: 0 }); continue; }
     try {
       const m = await (it.kind === 'static' || !it.kind ? loadShared : loadGLB)(new URL(it.glb, base).href);
       if (applyFlow(m.scene)) { level.water.visible = false; const f = scene.getObjectByName('graybox_waterfall'); if (f) f.visible = false; } // 新溪水 / 瀑布接管，灰盒水面和瀑布片收起
@@ -393,6 +403,7 @@ export async function applyManifest(level: Level, scene: THREE.Scene, url: strin
       const first = scene.getObjectByName(`env_${it.id}_0`) ?? m.scene;
       first.updateMatrixWorld(true); box.setFromObject(first); box.getCenter(c);
       r.center = c.toArray().map((v) => +v.toFixed(2));
+      if (warmup) { const added = scene.children.filter((o) => !before.has(o)); if (added.length) await warmup(added); }
       reports.push(r);
     } catch (e) {
       reports.push({ id: it.id, ok: false, err: String(e) });
