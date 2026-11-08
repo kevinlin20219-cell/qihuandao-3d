@@ -22,6 +22,9 @@ for f in old_js - new_js: os.remove(f"{pub}/assets/{f}")
 if os.path.isdir(f"{G}/dist/basis"):
     os.makedirs(f"{pub}/basis", exist_ok=True)
     for f in os.listdir(f"{G}/dist/basis"): shutil.copy(f"{G}/dist/basis/{f}", f"{pub}/basis/{f}")
+# 开场动画旁白等音频（public/audio → dist/audio → pub/audio）
+if os.path.isdir(f"{G}/dist/audio"):
+    shutil.copytree(f"{G}/dist/audio", f"{pub}/audio", dirs_exist_ok=True)
 # 2) 场景批次
 defaults = json.load(open(f"{G}/tools/pub_defaults.json"))
 for bt in batches:

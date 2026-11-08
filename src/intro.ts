@@ -2,8 +2,26 @@
 // 进页面立刻显示游戏简介，「开始冒险」按钮不必等加载；点下去先放开场动画，动画放着的同时后台加载角色和森林。
 // 动画放完（或点「跳过」）如果还没加载完，就停在片名上显示进度，等加载好再进游戏。?intro=0 或自动测试时跳过动画。
 import { readChapter } from './runtime/chapter_save';
-import { SCENES, CSS, SVG } from './intro_scenes';
+import { mountPaperIntro, prefetchIntroVoice, type PaperIntro } from './intro_paper.js';
 
+const PAPER_CSS = `
+#intro{position:fixed;inset:0;z-index:60;background:#050b08;color:#fff6df;overflow:hidden}
+#intro canvas{position:absolute;inset:0;width:100%;height:100%;display:block;filter:saturate(1.08) contrast(1.04)}
+#intro .pi-grain{position:absolute;inset:0;pointer-events:none;z-index:1;opacity:.32;mix-blend-mode:multiply;background-size:256px 256px}
+#intro .pi-vig{position:absolute;inset:0;pointer-events:none;z-index:2;background:radial-gradient(ellipse 78% 72% at 50% 48%,transparent 58%,rgba(0,0,0,.5))}
+#intro .pi-bar{position:absolute;left:0;right:0;height:8vh;background:#000;z-index:3}
+#intro .pi-bar.t{top:0}#intro .pi-bar.b{bottom:0}
+#intro .pi-cap{position:absolute;left:50%;bottom:calc(8vh + 22px);transform:translateX(-50%);width:min(940px,90vw);text-align:center;font-family:"Kaiti SC","STKaiti","KaiTi","BiauKai",serif;font-size:clamp(16px,2.25vw,26px);line-height:1.75;letter-spacing:.08em;text-shadow:0 2px 12px rgba(0,0,0,.95),0 0 3px #000;opacity:0;transition:opacity .8s;z-index:4}
+#intro .pi-cap.on{opacity:1}#intro .pi-cap.top{bottom:auto;top:calc(8vh + 22px)}
+#intro .pi-btn{position:absolute;z-index:6;appearance:none;border:1px solid rgba(246,239,220,.5);background:rgba(0,0,0,.35);color:#fff6df;border-radius:999px;padding:8px 18px;font:15px inherit;cursor:pointer}
+#intro .pi-btn:hover{background:rgba(0,0,0,.55)}
+#intro .pi-skip{right:16px;top:calc(8vh + 12px)}
+#intro .pi-snd{right:16px;bottom:calc(8vh + 12px);width:42px;height:42px;padding:0;font-size:18px}
+#intro .pi-load{position:absolute;left:50%;bottom:calc(8vh - 30px);transform:translateX(-50%);z-index:5;display:flex;align-items:center;gap:10px;font-size:12px;color:rgba(255,246,223,.75);opacity:.55;transition:opacity .6s}
+#intro .pi-load .bar{width:160px;height:4px;border-radius:2px;background:rgba(255,255,255,.18);overflow:hidden}
+#intro .pi-load .bar i{display:block;height:100%;width:0;background:#e2b45a;transition:width .3s}
+#intro.ended .pi-load{opacity:1;bottom:calc(8vh + 26px)}
+`;
 type StartOpts = { start: (resume: boolean) => void; clearSave: () => void };
 const TITLE_CSS = `
 #title .intro-chars{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
@@ -17,7 +35,8 @@ const TITLE_CSS = `
 export function setupIntro() {
   const params = new URLSearchParams(location.search);
   const skipAnim = params.get('intro') === '0' || (navigator.webdriver && params.get('intro') !== '1');
-  const style = document.createElement('style'); style.textContent = CSS + TITLE_CSS; document.head.appendChild(style);
+  if (!skipAnim && params.get('introvoice') !== '0') prefetchIntroVoice('audio/intro/');
+  const style = document.createElement('style'); style.textContent = PAPER_CSS + TITLE_CSS; document.head.appendChild(style);
   const card = document.querySelector('#title .card') as HTMLElement;
   const startBtn = document.getElementById('start') as HTMLButtonElement;
   const keylist = card.querySelector('.keylist');
@@ -44,7 +63,7 @@ export function setupIntro() {
   let onBegin: (() => void) | null = null;
   let progress = 0, label = '正在准备森林';
   let opts: StartOpts | null = null, envOk = false, choice: boolean | null = null, animDone = false;
-  let overlay: HTMLDivElement | null = null, barEl: HTMLElement | null = null, loadText: HTMLElement | null = null;
+  let overlay: HTMLDivElement | null = null, barEl: HTMLElement | null = null, loadText: HTMLElement | null = null, player: PaperIntro | null = null;
   const paint = () => {
     const pct = Math.round(progress * 100);
     ld.textContent = opts && envOk ? '森林准备好了' : `${label}… ${pct}%`;
@@ -54,49 +73,30 @@ export function setupIntro() {
   const tryEnter = () => {
     if (choice === null || !animDone || !opts || !envOk) return;
     const o = opts; const resume = choice; choice = null;
-    if (overlay) { overlay.style.transition = 'opacity .8s'; overlay.style.opacity = '0'; const ov = overlay; setTimeout(() => ov.remove(), 850); overlay = null; }
+    if (overlay) { overlay.style.transition = 'opacity .8s'; overlay.style.opacity = '0'; const ov = overlay, pl = player; setTimeout(() => { pl?.stop(); ov.remove(); }, 850); overlay = null; player = null; }
     if (!resume) o.clearSave();
     o.start(resume);
   };
 
-  function playIntro() {
-    overlay = document.createElement('div'); overlay.id = 'intro'; overlay.className = 'bars';
-    try { onBegin?.(); } catch { /* */ }
-    overlay.innerHTML = SVG + '<div class="vig"></div><div class="cap"></div><div class="ch"><div><small class="chs">一个人打不开的门，是留给朋友的</small><b class="chb">奇幻岛</b></div></div><button class="skip">跳过 ›</button><div class="load"><span></span><div class="bar"><i></i></div></div>';
+  // 剪纸开场动画（intro_paper.js，由预览页同一份代码生成）+ 旁白（Codex 20261108_intro_narration_selected_v001）
+  function mount(play: boolean) {
+    overlay = document.createElement('div'); overlay.id = 'intro';
+    overlay.innerHTML = '<canvas class="pi-c"></canvas><div class="pi-grain"></div><div class="pi-vig"></div><div class="pi-bar t"></div><div class="pi-bar b"></div><div class="pi-cap"></div>'
+      + '<button class="pi-btn pi-skip">跳过 ›</button><button class="pi-btn pi-snd" title="声音"></button><div class="pi-load"><span></span><div class="bar"><i></i></div></div>';
     document.body.appendChild(overlay);
-    barEl = overlay.querySelector('.bar i'); loadText = overlay.querySelector('.load span'); paint();
-    const cap = overlay.querySelector('.cap') as HTMLElement, ch = overlay.querySelector('.ch') as HTMLElement;
-    const groups = (cls: string) => overlay!.querySelectorAll<SVGGElement>('.sc-' + cls);
-    let i = 0; let timer = 0; let stopped = false;
-    const finish = () => {
-      if (stopped) return; stopped = true; clearTimeout(timer);
-      cap.classList.remove('on'); overlay?.querySelectorAll('.sc.on').forEach((g) => g.classList.add('on'));
-      ch.classList.add('on');
-      (overlay!.querySelector('.skip') as HTMLElement).hidden = true;
-      // 游戏片名停 3 秒，新游戏再换成第一章章名停 2.4 秒；加载没好就一直停在章名上显示进度
-      const chapter = () => { const sm = ch.querySelector('.chs') as HTMLElement, bb = ch.querySelector('.chb') as HTMLElement; ch.classList.remove('on'); setTimeout(() => { sm.textContent = '第一章'; bb.textContent = '吊桥重新相连'; ch.classList.add('on', 'chap'); }, 900); };
-      if (choice === false) { setTimeout(chapter, 3000); setTimeout(() => { animDone = true; tryEnter(); }, 5400); }
-      else setTimeout(() => { animDone = true; tryEnter(); }, 2400);
-    };
-    const step = () => {
-      if (stopped) return;
-      if (i >= SCENES.length) { finish(); return; }
-      const s = SCENES[i];
-      overlay!.querySelectorAll('.sc').forEach((g) => { if (!g.classList.contains('sc-' + s.cls)) g.classList.remove('on'); });
-      groups(s.cls).forEach((g) => g.classList.add('on'));
-      overlay!.classList.add('s-' + s.cls);
-      cap.classList.remove('on');
-      cap.textContent = s.text; void cap.offsetWidth; cap.classList.add('on');
-      i++; timer = window.setTimeout(step, s.dur * 1000);
-    };
-    (overlay.querySelector('.skip') as HTMLElement).onclick = () => finish();
-    step();
+    barEl = overlay.querySelector('.pi-load .bar i'); loadText = overlay.querySelector('.pi-load span'); paint();
+    let muted = false; try { muted = localStorage.getItem('qhd_mute') === '1'; } catch { /* */ }
+    const ov = overlay;
+    const p = player = mountPaperIntro(ov, {
+      audioBase: 'audio/intro/', muted, voice: params.get('introvoice') !== '0',
+      onMute: (m) => { try { localStorage.setItem('qhd_mute', m ? '1' : '0'); } catch { /* */ } },
+      onEnd: () => { ov.classList.add('ended'); (ov.querySelector('.pi-skip') as HTMLElement).hidden = true; animDone = true; tryEnter(); },
+    });
+    (ov.querySelector('.pi-skip') as HTMLElement).onclick = (e) => { e.stopPropagation(); p.skip(); };
+    if (play) { try { onBegin?.(); } catch { /* */ } p.start(0); } else p.skip();
   }
-  function waitScreen() {
-    // 继续冒险：不放动画，只显示片名和进度
-    playIntro(); const o = overlay!; o.querySelectorAll('.sc').forEach((g) => g.classList.remove('on'));
-    (o.querySelector('.skip') as HTMLElement).click();
-  }
+  const playIntro = () => mount(true);
+  const waitScreen = () => mount(false); // 继续冒险：不放动画，停在章名卡上显示进度
   const go = (resume: boolean) => {
     choice = resume;
     (document.getElementById('title') as HTMLElement).hidden = true;

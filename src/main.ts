@@ -32,7 +32,7 @@ async function boot() {
   // 入口简介和开场动画先出来，动画放着的时候继续往下加载（用户 11-08）
   const intro = setupIntro();
   // 开场动画一开始就放背景音乐（点按钮是用户手势，浏览器允许出声）；进游戏时直接沿用这一个
-  intro.onBegin(() => { if (new URLSearchParams(location.search).get('music') === '0') return; try { const m = new Music(); m.resume(); (window as any).__qhdEarlyMusic = m; } catch (e) { console.warn('音乐无法启动', e); } });
+  // 开场动画自带八音盒配乐和旁白；游戏音乐等进游戏再开（v94 起不再提前开）
   let bootStage = 0.05; intro.setProgress(0.03, '正在准备角色');
   const progTimer = setInterval(() => { const mp = (window as any).__qhdManifestProgress as { done: number; total: number } | undefined; const env = mp && mp.total ? mp.done / Math.max(mp.total, 150) : 0; intro.setProgress(0.3 * bootStage + 0.7 * env, env > 0 ? '正在布置森林' : '正在准备角色'); }, 300);
   const view = $('view');
@@ -495,7 +495,7 @@ async function boot() {
   addEventListener('keydown', (e) => { if (e.code === 'KeyM' && music && playing) ui.toast(music.toggle() ? '音乐：开（M 关闭）' : '音乐：关（M 打开）', 1.6); });
   function start(resume: boolean) {
     $('title').hidden = true;
-    if (!music && (window as any).__qhdEarlyMusic) music = (window as any).__qhdEarlyMusic;
+    try { muted = localStorage.getItem('qhd_mute') === '1'; } catch { /* */ } // 开场动画里也能关声音
     if (!music && new URLSearchParams(location.search).get('music') !== '0') { try { music = new Music(); } catch (e) { console.warn('音乐无法启动', e); } }
     music?.resume();
     if (!voice && new URLSearchParams(location.search).get('voice') === 'babble') { try { voice = new Voice(); /* 用户 11-03：卡通咿呀声不合适，默认不用，只留 ?voice=babble 备查 */ } catch (e) { console.warn('说话声无法启动', e); } }
@@ -596,12 +596,17 @@ async function boot() {
   let cameraSolidsReady = false;
   const cameraProbeDir = new THREE.Vector3();
   let capLast = 0;
+  // 录制开场片用（离线逐帧）：__qhdManual=true 时主循环停住，每次 __qhdStep() 前进固定 __qhdFixedDt 秒并渲染一帧
+  let manualStep = false, manualT = 0;
+  (window as any).__qhdStep = () => { manualStep = true; try { frame(); } finally { manualStep = false; } };
   function frame(now = performance.now()) {
-    if (fpsCap > 0) { if (now - capLast < 1000 / fpsCap - 2) { requestAnimationFrame(frame); return; } capLast = now; }
+    if ((window as any).__qhdManual && !manualStep) { clock.getDelta(); requestAnimationFrame(frame); return; }
+    if (!manualStep && fpsCap > 0) { if (now - capLast < 1000 / fpsCap - 2) { requestAnimationFrame(frame); return; } capLast = now; }
     const userOrbit = Math.abs(input.mouseDX) + Math.abs(input.mouseDY) > 0 || input.wheel !== 0;
-    requestAnimationFrame(frame);
-    const dt = Math.min(clock.getDelta(), 0.1);
-    const t = clock.elapsedTime;
+    if (!manualStep) requestAnimationFrame(frame);
+    const dt = manualStep ? ((window as any).__qhdFixedDt ?? 1 / 24) : Math.min(clock.getDelta(), 0.1);
+    if (manualStep) manualT += dt;
+    const t = manualStep ? clock.elapsedTime + manualT : clock.elapsedTime;
     fpsT += dt; frames++;
     if (fpsT > 1) {
       const fps = frames / fpsT; (window as any).__qhd.fps = Math.round(fps); fpsT = 0; frames = 0;
