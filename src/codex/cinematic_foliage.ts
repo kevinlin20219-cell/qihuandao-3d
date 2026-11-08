@@ -1,6 +1,8 @@
 // Close legacy broad leaves can read as black floating boards in the bridge cinematic.
 // Fade only their colour-pass alpha near the cinematic camera; keep shadows, wind,
 // placements unchanged. Ordinary follow views clear only the body sight corridor.
+// 0316 Claude: in follow view, also dither out leaves within ~1.3–2.6 m of the camera (user saw the
+// screen filled by big leaves when the camera backs into a bush).
 // Shared bark materials are isolated; shadow/depth materials are not modified.
 export function createCinematicFoliageFade(root) {
   const enabled = { value: 0 }, follow = { value: 0 }, targetDepth = { value: 0 }, clones = new WeakMap(), seen = new WeakSet();
@@ -24,9 +26,9 @@ export function createCinematicFoliageFade(root) {
           shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying float vCinematicLeafDepth;\nvarying vec3 vFoliageViewPosition;')
             .replace('#include <project_vertex>', '#include <project_vertex>\nvCinematicLeafDepth = -mvPosition.z;\nvFoliageViewPosition = mvPosition.xyz;');
           shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vCinematicLeafDepth;\nvarying vec3 vFoliageViewPosition;\nuniform float uCinematicLeafFade;\nuniform float uFollowLeafFade;\nuniform float uFollowTargetDepth;')
-            .replace('#include <alphatest_fragment>', 'if (uFollowLeafFade > 0.5 && vCinematicLeafDepth > 0.02 && vCinematicLeafDepth < uFollowTargetDepth - 0.25) {\n  vec2 projected = vFoliageViewPosition.xy * (uFollowTargetDepth / vCinematicLeafDepth);\n  float bodyY = clamp(projected.y, -1.2, 0.18);\n  float edge = length(vec2(projected.x, projected.y - bodyY));\n  float cut = 1.0 - smoothstep(0.36, 0.72, edge);\n  float dither = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);\n  if (cut > dither) discard;\n}\ndiffuseColor.a *= mix(1.0, smoothstep(2.0, 4.0, vCinematicLeafDepth), uCinematicLeafFade);\n#include <alphatest_fragment>');
+            .replace('#include <alphatest_fragment>', 'if (uFollowLeafFade > 0.5 && vCinematicLeafDepth > 0.02 && vCinematicLeafDepth < uFollowTargetDepth - 0.25) {\n  vec2 projected = vFoliageViewPosition.xy * (uFollowTargetDepth / vCinematicLeafDepth);\n  float bodyY = clamp(projected.y, -1.2, 0.18);\n  float edge = length(vec2(projected.x, projected.y - bodyY));\n  float cut = 1.0 - smoothstep(0.36, 0.72, edge);\n  float dither = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);\n  if (cut > dither) discard;\n}\nif (uFollowLeafFade > 0.5) {\n  float nearCut = 1.0 - smoothstep(1.3, 2.6, vCinematicLeafDepth);\n  float dn = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);\n  if (nearCut > dn) discard;\n}\ndiffuseColor.a *= mix(1.0, smoothstep(2.0, 4.0, vCinematicLeafDepth), uCinematicLeafFade);\n#include <alphatest_fragment>');
         };
-        material.customProgramCacheKey = () => key() + '_cinematicLeaf_v2_follow';
+        material.customProgramCacheKey = () => key() + '_cinematicLeaf_v3_follow_near';
         material.needsUpdate = true;
         clones.set(original, material); clones.set(material, material); stats.materials++;
         return material;
