@@ -7,8 +7,8 @@
 export function createCinematicFoliageFade(root) {
   const enabled = { value: 0 }, follow = { value: 0 }, targetDepth = { value: 0 }, clones = new WeakMap(), seen = new WeakSet();
   const stats = { meshes: 0, materials: 0 };
-  // v95（用户 11-08：树叶越改越差，回滚到调整前）：近处树叶淡出默认关闭，?leafnear=1 打开
-  const nearFade = { value: new URLSearchParams(location.search).get('leafnear') === '1' ? 1 : 0 };
+  // 近处树叶淡出：默认开（v96 恢复 v94 行为），?leafnear=0 关闭
+  const nearFade = { value: new URLSearchParams(location.search).get('leafnear') === '0' ? 0 : 1 };
   function refresh() {
     root.traverse(mesh => {
       if (!mesh.isMesh || mesh.isSkinnedMesh || seen.has(mesh) || !/foliage|leaf|fern|grass|bush|broadleaf|crown_sprays|crown_lobes|soft_layered_crown/i.test(mesh.name) || /COL_|MK_|bark|trunk|root|stem/i.test(mesh.name)) return;
