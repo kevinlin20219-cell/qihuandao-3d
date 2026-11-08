@@ -1,6 +1,7 @@
 import { batchMultiDrawEnvironment } from './codex/environment_multidraw';
 import { batchStaticEnvironment } from './codex/environment_batches';
 import { installDeerContactShade } from './codex/deer_contact_shade';
+import { collectContactBlobs } from './contact_blobs';
 import { chooseInteractionCameraOffset } from './codex/interaction_camera';
 import { chapter1Completion } from './codex/chapter1_completion';
 import { createCinematicFoliageFade } from './codex/cinematic_foliage';
@@ -415,6 +416,8 @@ async function boot() {
         }
         (window as any).__qhd.grayFloors = slabs.length;
       } }
+    // 0310 第 7 项：石头脚下的接触暗斑（合批前收集，物理碰撞就绪后摆放）
+    if (params.get('contact') !== '0') { const cb = collectContactBlobs(scene); setTimeout(() => { try { (window as any).__qhd.contact = cb.finish((f, d, m) => game.ph.ray(f, d, m)).stats; } catch (e) { console.warn('contact', e); } }, 1500); }
     if (params.get('render_batches') !== '0') { const h = (renderer.extensions.has('WEBGL_multi_draw') && params.get('render_multidraw') !== '0' ? batchMultiDrawEnvironment : batchStaticEnvironment)(THREE, scene, farL); environmentBatchHandle = h; (window as any).__qhd.environmentBatches = h.stats; cinematicFoliage.refresh(); if (params.get('warm') !== '0' && h.groups?.length) void warmObjects(h.groups); }
     if (new URLSearchParams(location.search).get('zone') !== '0') import('./scene_manifest').then(({ makeZoneCuller, farIdSet }) => { zones = makeZoneCuller(scene, farIdSet); (window as any).__qhd.zones = zones.stats; });
     if (tone2 && new URLSearchParams(location.search).get('dense') !== '0' && !/botanical/.test(envMan || '')) setTimeout(() => Promise.all([import('./atmosphere'), import('./codex/v49_art_compat')]).then(([{ densifyPlants }, { shouldSkipDensePlant }]) => { // v49：路边植被加密（等新碰撞进物理查询后再贴地）；0179：跳过新模型已铺植物的区域，避开桥头机关岗位

@@ -1,3 +1,4 @@
+import { readChapter, writeChapter, clearChapter } from './runtime/chapter_save';
 import { alignBridgeGrip, bridgeRailPoint } from './codex/bridge_grip_ik';
 import { setVineProgress } from './scene_manifest';
 import * as THREE from 'three';
@@ -83,7 +84,6 @@ const GATE_HINTS: [CharId, string][] = [
 /** 推石动作契约（Codex 0055）：汤团根到球心的水平距离、推动速度 */
 const PUSH_ROOT_TO_CENTER = 1.676;
 const PUSH_SPEED = 1.1;
-const SAVE_KEY = 'qhd3d_ch1_slice_v1';
 
 export class Game {
   pickHide: { g: THREE.Object3D; t: number } | null = null;
@@ -141,16 +141,16 @@ export class Game {
   followers() { return this.squad.filter((id) => id !== this.active).map((id) => this.actors[id]); }
 
   // ---------- 存档 ----------
-  hasSave(): boolean { try { return !!localStorage.getItem(SAVE_KEY); } catch { return false; } }
+  hasSave(): boolean { return !!readChapter('ch1'); }
   noSave = false;
   save() {
     if (this.noSave) return; // ?jump 测试时不覆盖孩子的存档
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify({ stage: this.stage, cp: this.cp, leaves: this.leaves, time: this.time, falls: this.falls, gate: this.gateOpen, bag: this.bag, got: this.level.pickups.filter((pk) => pk.taken).map((pk) => pk.id), rope: this.level.ropeclipFix.fixed } as Save)); } catch { /* 无痕窗口等情况下不保存 */ }
+    writeChapter('ch1', { stage: this.stage, cp: this.cp, leaves: this.leaves, time: this.time, falls: this.falls, gate: this.gateOpen, bag: this.bag, got: this.level.pickups.filter((pk) => pk.taken).map((pk) => pk.id), rope: this.level.ropeclipFix.fixed } satisfies Save as unknown as Record<string, unknown>); // B1：版本化存档（runtime/chapter_save.ts）
   }
-  clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch { /* */ } }
+  clearSave() { clearChapter('ch1'); }
   load(): boolean {
     let s: Save | null = null;
-    try { s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { s = null; }
+    s = readChapter('ch1') as unknown as Save | null; // 损坏的存档读出来是 null；旧的 qhd3d_ch1_slice_v1 自动迁移
     if (!s) return false;
     this.leaves = s.leaves || []; this.time = s.time || 0; this.falls = s.falls || 0;
     if (s.gate || s.stage > Stage.Crossroads) this.openGate(true);
