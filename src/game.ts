@@ -223,6 +223,7 @@ export class Game {
       if (inp.down('KeyD') || inp.down('ArrowRight')) wish.add(r);
       if (inp.down('KeyA') || inp.down('ArrowLeft')) wish.sub(r);
     }
+    const tw = (window as any).__qhdTestWish; if (tw && !locked) wish.set(tw.x, 0, tw.z); // 自动测试用：世界坐标方向（只在第二章）
     if (wish.lengthSq() > 0) wish.normalize();
     const speed = inp.down('ShiftLeft') || inp.down('ShiftRight') ? lead.def.run : lead.def.walk;
     lead.pose = 'idle'; lead.interWant = null; lead.lockYaw = false; lead.pushMoving = false;
