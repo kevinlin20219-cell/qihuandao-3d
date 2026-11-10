@@ -68,11 +68,13 @@ export function collectContactBlobs(scene: THREE.Scene, opts: { opacity?: number
     if (hs.length < 2) continue;
     hs.sort((a, b2) => a - b2); const gy = hs[Math.floor(hs.length / 2)];
     if (gy > b.max.y + 0.05 || gy < b.min.y - 0.6) continue; // 石头埋在地下，或悬空离地太远
+    // 11-10：露出地面太少的小石子（几乎埋在土里）不放暗斑——石子看不见，只剩一个孤立的黑点
+    const up = b.max.y - gy; if (up < Math.max(0.1, r * 0.3)) continue;
     keep.push({ x: c.x, z: c.z, y: gy + 0.015, sx: sz.x * 1.45 + 0.15, sz: sz.z * 1.45 + 0.15 });
     if (keep.length >= (opts.max ?? 3000)) break;
   }
   const geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
-  const mat = new THREE.MeshBasicMaterial({ map: blobTexture(), color: 0x000000, transparent: true, opacity: opts.opacity ?? 0.42, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, fog: true });
+  const mat = new THREE.MeshBasicMaterial({ map: blobTexture(), color: 0x000000, transparent: true, opacity: opts.opacity ?? 0.32, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, fog: true });
   const im = new THREE.InstancedMesh(geo, mat, Math.max(1, keep.length)); im.name = 'contact_blobs'; im.count = keep.length;
   im.castShadow = false; im.receiveShadow = false; im.renderOrder = 1; im.frustumCulled = false;
   const q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
