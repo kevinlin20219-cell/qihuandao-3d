@@ -1,4 +1,5 @@
-import { readChapter, writeChapter, clearChapter } from './runtime/chapter_save';
+import { readChapter, writeChapter, clearChapter, type ChapterId } from './runtime/chapter_save';
+import { buildChapter2Shell, type Ch2Shell } from './level/chapter2_shell';
 import { alignBridgeGrip, bridgeRailPoint } from './codex/bridge_grip_ik';
 import { setVineProgress } from './scene_manifest';
 import * as THREE from 'three';
@@ -126,6 +127,12 @@ export class Game {
   onDone?: () => void;
   // 测试与调试用
   stats = { maxFrameMs: 0 };
+  /** C1：当前章节。第二章目前只有空壳（level/chapter2_shell.ts），第一章常驻不卸载 */
+  chapter: ChapterId = 'ch1';
+  ch2: Ch2Shell | null = null;
+  ch2Cp = 'A_entry';
+  /** 第二章计时（和第一章的 time 分开） */
+  ch2Time = 0;
 
   constructor(ph: Physics, scene: THREE.Scene, ui: UI, input: Input) {
     this.ph = ph; this.scene = scene; this.ui = ui; this.input = input;
@@ -145,9 +152,11 @@ export class Game {
   noSave = false;
   save() {
     if (this.noSave) return; // ?jump 测试时不覆盖孩子的存档
+    if (this.chapter === 'ch2') { writeChapter('ch2', { v: 1, cp: this.ch2Cp, time: this.ch2Time }); return; } // 第二章独立存档段，不碰第一章的
     writeChapter('ch1', { stage: this.stage, cp: this.cp, leaves: this.leaves, time: this.time, falls: this.falls, gate: this.gateOpen, bag: this.bag, got: this.level.pickups.filter((pk) => pk.taken).map((pk) => pk.id), rope: this.level.ropeclipFix.fixed } satisfies Save as unknown as Record<string, unknown>); // B1：版本化存档（runtime/chapter_save.ts）
   }
-  clearSave() { clearChapter('ch1'); }
+  /** 只清当前章节的存档段：在第二章里「从头再玩」不能把第一章的进度清掉 */
+  clearSave() { clearChapter(this.chapter); }
   load(): boolean {
     let s: Save | null = null;
     s = readChapter('ch1') as unknown as Save | null; // 损坏的存档读出来是 null；旧的 qhd3d_ch1_slice_v1 自动迁移
@@ -176,8 +185,61 @@ export class Game {
     if (!silent) this.save();
   }
 
+  // ---------- 章节切换（C1） ----------
+  /** 切到第二章空壳 / 回到第一章。第二章每次进入都新建、离开时整章释放；第一章保留原样（阶段、背包、存档都不变） */
+  enterChapter(id: ChapterId) {
+    if (id === this.chapter) return;
+    this.cinematic = null; this.shout = null; this.observing = false; this.pickSlide = null; this.respawning = 0; this.ui.fade(false);
+    this.ui.clearLines(); this.ui.countEnd(); this.ui.hold(null, 0); this.ui.xray(null); this.ui.warn(false); this.ui.observe(false); this.ui.crosshair(false);
+    for (const a of Object.values(this.actors)) { a.goal = null; a.holding = false; }
+    if (id === 'ch2') {
+      this.ch2 = buildChapter2Shell(this.scene, this.ph);
+      this.chapter = 'ch2';
+      const s = readChapter('ch2'); this.ch2Time = s && typeof s.time === 'number' ? s.time : 0; this.ch2Cp = 'A_entry';
+      this.respawnAll();
+      this.ui.objective('第二章 · 冲刷河岸（灰盒）：这里还在搭建，只能走一走');
+      this.save();
+    } else {
+      this.chapter = 'ch1';
+      this.ch2?.dispose(); this.ch2 = null;
+      this.respawnAll();
+      this.ui.objective(OBJECTIVES[this.stage]);
+      this.save(); // 第一章的状态在第二章期间没动过，按原样写回，同时把「当前章节」改回第一章
+    }
+  }
+
+  /** 第二章空壳里的主循环：只有走、跳、换人、跟随、掉落重来，没有第一章的机关和提示 */
+  private updateCh2(dt: number, t: number, camYaw: number) {
+    this.ch2Time += dt;
+    const inp = this.input, lead = this.leader;
+    const locked = this.respawning > 0;
+    for (let i = 0; i < this.squad.length; i++) if (inp.pressed('Digit' + (i + 1))) this.switchTo(this.squad[i]);
+    if (inp.pressed('Tab')) this.quickSwitch();
+    if (inp.pressed('Enter')) this.ui.skipLine();
+    const f = new THREE.Vector3(-Math.sin(camYaw), 0, -Math.cos(camYaw)), r = new THREE.Vector3(-f.z, 0, f.x), wish = new THREE.Vector3();
+    if (!locked) {
+      if (inp.down('KeyW') || inp.down('ArrowUp')) wish.add(f);
+      if (inp.down('KeyS') || inp.down('ArrowDown')) wish.sub(f);
+      if (inp.down('KeyD') || inp.down('ArrowRight')) wish.add(r);
+      if (inp.down('KeyA') || inp.down('ArrowLeft')) wish.sub(r);
+    }
+    if (wish.lengthSq() > 0) wish.normalize();
+    const speed = inp.down('ShiftLeft') || inp.down('ShiftRight') ? lead.def.run : lead.def.walk;
+    lead.pose = 'idle'; lead.interWant = null; lead.lockYaw = false; lead.pushMoving = false;
+    lead.move(dt, wish.multiplyScalar(locked ? 0 : speed), !locked && inp.pressed('Space'));
+    this.updateFollowers(dt, false, () => false);
+    for (const a of Object.values(this.actors)) {
+      if (a.pos.y < -5 && this.respawning <= 0) { this.respawnSoon(a === lead ? 'hanhan' : null, '小心水！先回到岸上。'); break; }
+    }
+    if (this.respawning > 0) { this.respawning -= dt; if (this.respawning <= 0.35 && this.respawning + dt > 0.35) this.respawnAll(); if (this.respawning <= 0) this.ui.fade(false); }
+    for (const a of Object.values(this.actors)) { a.sync(dt, t); a.setActiveLook(a === lead); }
+    this.ch2?.update(dt, t);
+    this.updateKeys(false);
+  }
+
   // ---------- 主循环 ----------
   update(dt: number, t: number, camYaw: number, camFwd: THREE.Vector3) {
+    if (this.chapter === 'ch2') return this.updateCh2(dt, t, camYaw);
     this.time += dt; this.stageT += dt;
     if (this.stage >= Stage.Inspect) this.level.roam?.releaseBoulder(this.ph); // 巨石推走以后，坡两侧可以走
     const inp = this.input;
@@ -839,7 +901,7 @@ export class Game {
   }
 
   respawnAll() {
-    const c = this.level.checkpoints[this.cp];
+    const c = this.chapter === 'ch2' && this.ch2 ? this.ch2.spawn : this.level.checkpoints[this.cp];
     const fwd = new THREE.Vector3(0, 0, 1);
     this.squad.forEach((id, i) => {
       const a = this.actors[id];
@@ -993,6 +1055,7 @@ export class Game {
   }
 
   updateKeys(onBridge: boolean) {
+    if (this.chapter === 'ch2') { this.ui.keys([['W A S D', '走（Shift 跑，空格跳）'], ['1 2 3', '换人']]); return; } // 第二章灰盒：只有自己的按键，不读第一章的机关和踏石
     const k: [string, string][] = [];
     const p = this.leader.pos, L = this.level;
     const G = L.gate;

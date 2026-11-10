@@ -532,6 +532,8 @@ async function boot() {
     }
     // ?jump=entry|crossroads|bridge|deer：测性能用，直接跳到第一章的几个地方（不存档）
     const jump = params.get('jump'); if (jump) jumpTo(jump);
+    // C1：?chapter=2 直接进第二章空壳（灰盒，只能走一走）；正式入口以后放在第一章通关页
+    if (params.get('chapter') === '2') game.enterChapter('ch2');
     const lp = game.leader.pos; cam.target.copy(lp).add(new THREE.Vector3(0, 1.3, 0));
     playing = true;
     renderer.domElement.focus();
@@ -549,6 +551,8 @@ async function boot() {
     cam.yaw = 0; cam.target.copy(game.leader.pos).add(new THREE.Vector3(0, 1.3, 0));
   }
   (window as any).__qhdJump = jumpTo;
+  // C1 测试用：__qhdChapter('ch2' | 'ch1') 切章；镜头跟到新位置
+  (window as any).__qhdChapter = (id: 'ch1' | 'ch2') => { game.enterChapter(id); cam.target.copy(game.leader.pos).add(new THREE.Vector3(0, 1.3, 0)); return { chapter: game.chapter, shell: game.ch2?.stats ?? null }; };
   // 调试：屏幕坐标（0–1）处是哪个网格、哪个材质
   (window as any).__qhdPick = (u: number, v: number) => { const rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(u * 2 - 1, 1 - v * 2), camera); const shown = (o: THREE.Object3D | null): boolean => !o || (o.visible && shown(o.parent)); const h = rc.intersectObjects(scene.children, true).find((x) => (x.object as THREE.Mesh).isMesh && shown(x.object) && x.object.parent?.name !== 'sun_rays'); if (!h) return null; const m = h.object as THREE.Mesh; const mat = ([] as THREE.Material[]).concat(m.material)[0] as THREE.MeshStandardMaterial; return { mesh: m.name, parent: m.parent?.name, mat: mat.name, color: mat.color?.getHexString(), map: !!mat.map, p: h.point.toArray().map((x) => +x.toFixed(2)) }; };
 

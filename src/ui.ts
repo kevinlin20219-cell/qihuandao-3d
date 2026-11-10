@@ -182,6 +182,8 @@ export class UI {
   }
 
   skipLine() { if (this.current) this.lineT = 0; }
+  /** 切章时清掉还没说完、排着队的台词（不触发每句结束的回调，免得上一章的剧情接着往下走） */
+  clearLines() { this.queue = []; this.current = null; this.lineT = 0; $('say').hidden = true; }
 
   /** 对话泡：说话人在画面里就放到他头顶（限制在屏幕内、尾巴指向他），否则回到屏幕下方中间 */
   private place(dt: number) {
