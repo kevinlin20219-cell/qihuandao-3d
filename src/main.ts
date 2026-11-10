@@ -39,7 +39,9 @@ async function boot() {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   // ?quality=high|mid|low 固定画质；默认 auto（自动测试 / 无头浏览器时不自动调，保证截图一致）
   let qParam = new URLSearchParams(location.search).get('quality') || 'auto';
-  const PR_STEPS = [1.5, 1.25, 1.0, 0.85, 0.7].filter((v) => v <= Math.max(1, devicePixelRatio) + 0.01);
+  // 11-10 用户反馈 Windows 画面糊：自动降档最低只到屏幕实际像素的约 2/3（高分屏不低于 1.0，普通屏不低于 0.85），不再降到 0.7
+  const PR_FLOOR = Math.max(0.85, Math.min(1, devicePixelRatio * 0.67));
+  const PR_STEPS = [1.5, 1.25, 1.0, 0.85, 0.7].filter((v) => v <= Math.max(1, devicePixelRatio) + 0.01 && (qParam === 'low' || v >= PR_FLOOR - 0.01));
   let prNow = qParam === 'low' ? 0.85 : qParam === 'mid' ? 1.0 : Math.min(devicePixelRatio, 1.5);
   if (!PR_STEPS.includes(prNow)) PR_STEPS.unshift(prNow);
   const autoQ = qParam === 'auto' && !navigator.webdriver;
@@ -443,6 +445,19 @@ async function boot() {
     // 地面草、蕨、灌木照旧接收。必须在合批前设置（合批按 receiveShadow 分组）。?leafshadow=1 恢复
     /* v96 恢复 v94：树冠默认不接收阴影，?leafshadow=1 恢复接收 */ if (params.get('leafshadow') !== '1') { let n = 0; scene.traverse((o: any) => { if (o.isMesh && o.receiveShadow && /crown|canopy|foliage|spray|lobe|leaves|leaf_card|treewall|tree_.*leaf/i.test(o.name) && !/COL_|MK_|bark|trunk|root|stem|litter|fallen|vine_leaf|grass|fern|bush|herb/i.test(o.name)) { o.receiveShadow = false; n++; } }); (window as any).__qhd.leafNoRecv = n; }
     // 0310 第 7 项：石头脚下的接触暗斑（合批前收集，物理碰撞就绪后摆放）
+    // 11-10 用户反馈「入口路两边小黑点」：细草片（VIS_painted_grass 等）是竖着的薄片，法线朝四周，背光那面发黑。
+    // 草按「朝上」受光，和地面一样亮（只换草自己的材质副本，不改 Codex 模型）。?grassup=0 关闭
+    if (params.get('grassup') !== '0') {
+      const GRASS = /painted_grass|short_grass|grass_tuft|grass_blade|grass_card|tuft/i; const clones = new Map<THREE.Material, THREE.Material>(); let n = 0;
+      scene.traverse((o: any) => {
+        if (!o.isMesh || o.isSkinnedMesh || !GRASS.test(o.name) || /COL_|MK_/.test(o.name)) return;
+        const one = (mt: any) => { if (!mt || !('roughness' in mt)) return mt; let c = clones.get(mt) as any; if (!c) { c = mt.clone(); c.name = (mt.name || 'mat') + '_grassUp';
+          c.onBeforeCompile = (sh: any) => { sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n\tnormal = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );'); };
+          c.customProgramCacheKey = () => 'grassUp'; clones.set(mt, c); } return c; };
+        o.material = Array.isArray(o.material) ? o.material.map(one) : one(o.material); n++;
+      });
+      (window as any).__qhd.grassUp = { meshes: n, materials: clones.size };
+    }
     if (params.get('contact') !== '0') { const cb = collectContactBlobs(scene); setTimeout(() => { try { (window as any).__qhd.contact = cb.finish((f, d, m) => game.ph.ray(f, d, m)).stats; void warmScene('contact'); } catch (e) { console.warn('contact', e); } }, 1500); }
     if (params.get('render_batches') !== '0') { const h = (renderer.extensions.has('WEBGL_multi_draw') && params.get('render_multidraw') !== '0' ? batchMultiDrawEnvironment : batchStaticEnvironment)(THREE, scene, farL); environmentBatchHandle = h; (window as any).__qhd.environmentBatches = h.stats; cinematicFoliage.refresh(); if (params.get('warm') !== '0' && h.groups?.length) void warmObjects(h.groups); }
     void warmScene('batched').finally(() => { intro.envReady(); clearInterval(progTimer); });
@@ -599,7 +614,7 @@ async function boot() {
     (window as any).__qhd.pixelRatio = prNow;
   };
   const clock = new THREE.Clock();
-  let acc = 0, fpsT = 0, frames = 0;
+  let acc = 0, fpsT = 0, frames = 0, playSince = 0;
   const FIXED = 1 / 60;
   const camFwd = new THREE.Vector3();
 
@@ -628,12 +643,12 @@ async function boot() {
     if (fpsT > 1) {
       const fps = frames / fpsT; (window as any).__qhd.fps = Math.round(fps); fpsT = 0; frames = 0;
       if (fpsEl) fpsEl.textContent = `${Math.round(fps)} 帧/秒 · 分辨率 ×${prNow} · ${renderer.info.render.calls} 次绘制 · ${Math.round(renderer.info.render.triangles / 1000)}k 面` + ((performance as any).memory ? ` · 内存 ${Math.round((performance as any).memory.usedJSHeapSize / 1048576)} MB` : '');
-      // 画质自动调节（目标：Windows 轻薄本集成显卡稳定 50 帧以上）：连续 2 秒低于 45 帧就降渲染分辨率，连续 8 秒高于 58 帧再升回去
-      if (autoQ && playing && !paused) {
-        const tg = fpsCap || 60; if (fps < tg * 0.75) { lowN++; highN = 0; } else if (fps > tg * 0.96) { highN++; lowN = 0; } else { lowN = 0; highN = 0; }
+      // 画质自动调节（目标：Windows 轻薄本集成显卡稳定 50 帧以上）：连续 3 秒低于目标 75% 就降一档渲染分辨率，连续 4 秒高于 90% 再升回去（11-10 放宽回升，最低档见 PR_FLOOR）
+      if (autoQ && playing && !paused && (playSince ||= now) && now - playSince > 6000) { // 开局 6 秒内（加载、预热的卡顿）不算
+        const tg = fpsCap || 60; if (fps < tg * 0.75) { lowN++; highN = 0; } else if (fps > tg * 0.9) { highN++; lowN = 0; } else { lowN = 0; highN = 0; }
         const i = PR_STEPS.indexOf(prNow);
-        if (lowN >= 2 && i < PR_STEPS.length - 1) { prNow = PR_STEPS[i + 1]; renderer.setPixelRatio(prNow); composer.setPixelRatio(prNow); lowN = 0; }
-        else if (highN >= 8 && i > 0) { prNow = PR_STEPS[i - 1]; renderer.setPixelRatio(prNow); composer.setPixelRatio(prNow); highN = 0; }
+        if (lowN >= 3 && i < PR_STEPS.length - 1) { prNow = PR_STEPS[i + 1]; renderer.setPixelRatio(prNow); composer.setPixelRatio(prNow); lowN = 0; }
+        else if (highN >= 4 && i > 0) { prNow = PR_STEPS[i - 1]; renderer.setPixelRatio(prNow); composer.setPixelRatio(prNow); highN = 0; }
         (window as any).__qhd.pixelRatio = prNow;
       }
     }
