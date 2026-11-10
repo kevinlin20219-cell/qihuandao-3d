@@ -548,7 +548,8 @@ async function boot() {
     // ?jump=entry|crossroads|bridge|deer：测性能用，直接跳到第一章的几个地方（不存档）
     const jump = params.get('jump'); if (jump) jumpTo(jump);
     // C1：?chapter=2 直接进第二章空壳（灰盒，只能走一走）；正式入口以后放在第一章通关页
-    if (params.get('chapter') === '2') game.enterChapter('ch2');
+    // 私有试玩页在 claude.ai 里打开时网址参数传不进来，只有 #标记能传：网址末尾加 #chapter-2 也进第二章
+    if (params.get('chapter') === '2' || location.hash === '#chapter-2') game.enterChapter('ch2');
     const lp = game.leader.pos; cam.target.copy(lp).add(new THREE.Vector3(0, 1.3, 0));
     playing = true;
     renderer.domElement.focus();
