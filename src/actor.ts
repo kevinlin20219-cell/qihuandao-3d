@@ -93,6 +93,14 @@ export class Actor {
     scene.add(this.root);
   }
 
+  /** 离开章节时释放（第二章临时出场的伙伴用）：物理体、控制器、网格、材质 */
+  dispose(ph: { world: RAPIER.World }) {
+    try { ph.world.removeCharacterController(this.ctrl); } catch { /* */ }
+    try { ph.world.removeRigidBody(this.body); } catch { /* */ }
+    this.root.removeFromParent();
+    this.root.traverse((o: any) => { if (o.isMesh || o.isSprite) { o.geometry?.dispose?.(); const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) { m?.map?.dispose?.(); m?.dispose?.(); } } });
+  }
+
   get pos(): THREE.Vector3 { const t = this.body.translation(); return new THREE.Vector3(t.x, t.y - this.def.height / 2, t.z); }
 
   teleport(p: THREE.Vector3, yaw?: number) {
