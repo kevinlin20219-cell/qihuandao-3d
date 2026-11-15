@@ -118,6 +118,7 @@ export class Ch2Play {
     this.beacon.position.y = 3; this.root.add(this.beacon);
     this.exitCol = g.ph.box(sh.world(40, 1, 68.2), { x: 8, y: 2, z: 0.4 }); this.cols.push(this.exitCol);
     this.hud = this.buildHud();
+    void this.loadArt();
     this.restore();
   }
 
@@ -227,6 +228,7 @@ export class Ch2Play {
     const yy = new Actor(CHARS.youyou, g.ph, g.scene, sh.world(yyPos.x, yyPos.y + 0.05, yyPos.z));
     const bb = new Actor(CHARS.beibei, g.ph, g.scene, sh.world(bbPos.x, bbPos.y + 0.05, bbPos.z));
     g.actors.youyou = yy; g.actors.beibei = bb; this.extras = [yy, bb];
+    (g as any).loadCharModel?.('youyou'); (g as any).loadCharModel?.('beibei'); // C12 Codex 正式模型（地址里没有就保持灰盒）
   }
   setSquad(ids: CharId[], active: CharId) {
     const g = this.g; g.squad = ids.slice(); g.observing = false; g.ui.observe(false);
@@ -253,7 +255,50 @@ export class Ch2Play {
   private giveLeaf(who: CharId) { if (this.s.leaves.includes(who)) return; this.s.leaves.push(who); this.refreshLeaves(); this.g.leader.playOnce('cheer'); this.g.ui.say(who, '光之叶亮了！', 2.2); }
 
   // ======================= 主循环 =======================
+  // ======================= C12 美术（Codex 资产）=======================
+  // 做法：灰盒的碰撞和玩法一律不动，只把灰盒方块换成透明、把 Codex 模型挂上去跟着动。?ch2art=0 或 ?gray=1 回到纯灰盒
+  private art: { stones: THREE.Object3D[]; grayStones: THREE.Object3D[]; seats: Partial<Record<CharId, THREE.Object3D>> } | null = null;
+  private disposed = false; private artObjs: THREE.Object3D[] = [];
+  private async loadArt() {
+    const q = new URLSearchParams(location.search), base = q.get('ch2art') ?? (window as any).__DEFAULT_MODELS?.ch2art;
+    if (!base || base === '0' || q.has('gray')) return;
+    const { loadGLB } = await import('../assets');
+    const ld = (n: string) => loadGLB(base + n).then((m) => m.scene, (e) => { console.error('第二章美术加载失败', n, e); return null; });
+    const [stoneM, sluiceM, raftM, dryM, soakM] = await Promise.all(['stones.wasm', 'sluice.wasm', 'raft.wasm', 'floatwood_dry.wasm', 'floatwood_soaked.wasm'].map(ld));
+    if (this.disposed) return;
+    const hide = new THREE.MeshBasicMaterial({ visible: false }); this.mats.push(hide);
+    const prep = (o: THREE.Object3D) => { this.artObjs.push(o); o.traverse((c) => { if (/^COL_/.test(c.name)) c.visible = false; const m = c as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } }); return o; };
+    const skin = (target: THREE.Object3D, vis: THREE.Object3D) => { target.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh) m.material = hide; }); target.add(vis); };
+    const A: NonNullable<typeof this.art> = { stones: [], grayStones: [], seats: {} };
+    // 稳石：每段一份，模型 +X 是往东变高，灰盒是往西变高 → 转 180°；升降跟着灰盒第一块石头走（灰盒的 6 秒退水 / 锁定逻辑不变）
+    if (stoneM) {
+      this.root.traverse((c) => { if (c.name === 'ch2_steady_stone') A.grayStones.push(c); });
+      SEGMENTS.forEach((seg, k) => {
+        const o = prep(k ? stoneM.clone() : stoneM); const anim = o.getObjectByName('ANIM_steady_segment_1'); if (anim) anim.position.y = 0;
+        o.rotation.y = Math.PI; o.position.set((seg[0] + seg[3]) / 2, 0, STONE_Z); o.name = 'ch2_art_stones_' + k; this.root.add(o); A.stones.push(o);
+      });
+      for (const gs of A.grayStones) gs.visible = false;
+    }
+    if (sluiceM) { const m = this.root.getObjectByName('ch2_sluice_marker'); if (m) m.visible = false; prep(sluiceM); sluiceM.position.set(0, 0, -24); sluiceM.name = 'ch2_art_sluice'; this.root.add(sluiceM); }
+    // 浮木：挂到灰盒圆柱上（圆柱长轴是本地 y，模型长轴是 x）
+    for (const m of MATS) if ((m.kind === 'dry' && dryM) || (m.kind === 'soaked' && soakM)) {
+      const v = prep((m.kind === 'dry' ? dryM! : soakM!).clone()); v.rotation.z = Math.PI / 2; skin(this.pickMeshes.get(m.id)!, v);
+    }
+    // 木筏：模型筏心放到灰盒筏心，座位用模型自己的 MK_ch2_seat_*（0403 问的：程序侧按最终椅位节点对齐）
+    if (raftM) {
+      prep(raftM); const box = new THREE.Box3().setFromObject(raftM), c = box.getCenter(new THREE.Vector3());
+      raftM.position.set(-c.x, -0.2 - box.min.y, -c.z); skin(this.raftMesh, raftM);
+      for (const id of ALL5) { const mk = raftM.getObjectByName('MK_ch2_seat_' + id); if (mk) A.seats[id] = mk; }
+    }
+    this.art = A; (window as any).__qhd.ch2art = { stones: A.stones.length, sluice: !!sluiceM, raft: !!raftM, seats: Object.keys(A.seats), floatwood: !!dryM && !!soakM };
+  }
+  private updateArt() {
+    const A = this.art; if (!A || !A.grayStones.length) return;
+    A.stones.forEach((o, k) => { const g0 = A.grayStones[k * 4]; if (g0) o.position.y = g0.position.y + 0.5 - STONE_TOPS[0]; });
+  }
+
   update(dt: number, t: number, camYaw: number) {
+    this.updateArt();
     const g = this.g, inp = g.input, lead = g.leader, s = this.s;
     g.ch2Time += dt;
     const panel = !!this.panelEl;
@@ -297,6 +342,9 @@ export class Ch2Play {
         if (a.goal && !a.holding) this.walkTo(a, dt); else a.move(dt, new THREE.Vector3(), false);
         a.pose = a.holding ? (a.def.id === 'tangtuan' ? 'push' : 'hold') : s.stage === 'spotted' && EAST.includes(a.def.id) && this.team === 'west' ? 'cheer' : 'idle';
       }
+      // C12：有 Codex 正式模型时，守岗用共用交互动作（汤团双手顶撑杆、佑佑扳拉杆）；灰盒没有这些片段，自动忽略
+      if (this.posted.brace && g.actors.tangtuan) g.actors.tangtuan.interWant = 'brace_door';
+      if (this.posted.lever && g.actors.youyou) g.actors.youyou.interWant = 'pry';
       this.updateYouyouPath();
       this.checkFalls(dt);
     }
@@ -369,7 +417,7 @@ export class Ch2Play {
         const k = s.segs, spot = k === 0 ? SENSE_EAST : V(SEG_END_X[k - 1], STONE_Z);
         if (this.distL(spot) < (k === 0 ? 2.2 : 1.4)) {
           this.bbSpot = spot.clone(); // 摸完就守在石头路起点，换人去喊口令时不会跟着走
-          if (!this.sensed[k]) { this.sensed[k] = true; this.kit.setSensed(k, true); g.ui.say('beibei', k === 0 ? '这块石头下面的水声，和别的不一样。' : '下面这几块也是稳的，我摸到了。', 3, undefined, true); this.progress(); }
+          if (!this.sensed[k]) { this.sensed[k] = true; g.actors.beibei?.interactOnce('crouch_grab_rope'); this.kit.setSensed(k, true); g.ui.say('beibei', k === 0 ? '这块石头下面的水声，和别的不一样。' : '下面这几块也是稳的，我摸到了。', 3, undefined, true); this.progress(); }
           else g.ui.say('beibei', '我记住了，就是这几块。', 1.6, undefined, true);
         } else { g.ui.say('beibei', '这里摸不到……到河边离石头近一点（发光处）。', 2.4, 'bb_far_' + k); this.stepErr++; }
         return;
@@ -560,7 +608,7 @@ export class Ch2Play {
   // ======================= C5 材料与木盒 =======================
   private take(m: typeof MATS[number]) {
     const g = this.g, s = this.s, c = s.carry;
-    s.taken.push(m.id); this.pickMeshes.get(m.id)!.visible = false;
+    s.taken.push(m.id); this.pickMeshes.get(m.id)!.visible = false; this.g.leader.interactOnce('crouch_grab_rope');
     if (m.kind === 'dry' || m.kind === 'soaked') {
       c[m.kind]++;
       const firstWood = c.dry + c.soaked === 1;
@@ -668,7 +716,9 @@ export class Ch2Play {
     this.raftMesh.position.set(p.x, y, p.z); this.raftMesh.rotation.y = yaw; this.raftMesh.rotation.z = Math.sin(t * 1.7) * 0.03;
     const seats: [CharId, number, number][] = [['youyou', 0, -1.15], ['tangtuan', -0.55, 0.15], ['hanhan', 0.55, 0.15], ['paipai', -0.45, 1.05], ['beibei', 0.45, 1.05]];
     const right = new THREE.Vector3(-dir.z, 0, dir.x);
-    for (const [id, sx, sz] of seats) { const a = g.actors[id]; const q = p.clone().addScaledVector(right, -sx).addScaledVector(dir, sz); a.teleport(this.W(q, y + 0.22), yaw); a.pose = id === 'youyou' ? 'hold' : 'idle'; }
+    this.raftMesh.updateMatrixWorld(true);
+    for (const [id, sx, sz] of seats) { const a = g.actors[id]; const mk = this.art?.seats[id]; const q = p.clone().addScaledVector(right, -sx).addScaledVector(dir, sz);
+      if (mk) { const w = mk.getWorldPosition(new THREE.Vector3()); a.teleport(new THREE.Vector3(w.x, this.g.ch2!.world(0, y + 0.22, 0).y, w.z), yaw); } else a.teleport(this.W(q, y + 0.22), yaw); a.pose = id === 'youyou' ? 'hold' : 'idle'; a.interWant = id === 'youyou' ? null : 'row'; } // C12：四人划桨
   }
   private raftHit(line: string) { const R = this.raft!; if (R.hitT > 0) return; R.hitT = 0.9; this.g.ui.fade(true); this.g.ui.say('youyou', line, 2.6, undefined, true); this.stepErr++; }
   private raftPaddle() {
@@ -750,6 +800,7 @@ export class Ch2Play {
       while (Rh.beat < 3 && Rh.t >= Rh.beat * 1.2) { g.ui.count(words[Rh.beat], Rh.beat, 0.8); this.countHint(Rh.beat === 2 ? '现在按 E！' : '数到第三下按 E'); Rh.beat++; }
       if (Rh.t > 2.4 + 0.8) { g.ui.countEnd('miss'); T.rhythm = null; this.stepErr++; g.ui.say('beibei', '慢了一点……没关系，再来一次（按 E）。', 2.4, undefined, true); }
     }
+    const tt = g.actors.tangtuan; if (tt) tt.interWant = T.rhythm ? 'push_stone' : null; // C12：数心跳时汤团推石
     if (this.s.turtle && this.local().z > EXIT_Z && this.s.stage === 'turtle') this.finish();
   }
   private finish() {
@@ -941,6 +992,11 @@ export class Ch2Play {
 
   // ======================= 释放 =======================
   dispose() {
+    this.disposed = true;
+    { const seen = new Set<unknown>(); for (const o of this.artObjs) { o.removeFromParent(); o.traverse((c) => { const m = c as THREE.Mesh; if (!m.isMesh) return; if (!seen.has(m.geometry)) { seen.add(m.geometry); m.geometry.dispose(); }
+      for (const mt of ([] as THREE.Material[]).concat(m.material)) { if (seen.has(mt)) continue; seen.add(mt); for (const v of Object.values(mt)) if ((v as THREE.Texture)?.isTexture && !seen.has(v)) { seen.add(v); (v as THREE.Texture).dispose(); } mt.dispose(); } }); } this.artObjs = []; this.art = null; }
+    // 文件缓存（THREE.Cache 留着原始 GLB 字节）：第二章专用的模型离开时一起清掉，下次进章节从浏览器缓存重新读
+    for (const k of Object.keys((THREE.Cache as any).files)) if (/ch2_art|youyou|beibei/.test(k)) THREE.Cache.remove(k);
     const g = this.g;
     this.closePanel(); this.hud.remove(); g.ui.hold(null, 0); g.ui.countEnd();
     for (const c of this.cols) g.ph.remove(c); this.cols.length = 0;

@@ -151,7 +151,7 @@ async def main():
             if ok: break
             await E("__T.step(1,0.1)")
         await E("__T.key('KeyE')"); await E("__T.step(30,0.1)"); await mark("C8 石龟平静", shot="c8_turtle")
-        r = await E("__T.route([[47,50.6],[47,64],[40,64],[40,74]])"); await E("__T.step(5,0.1)")
+        r = await E("__T.route([[47,50.6],[47,64],[40,64],[40,72.8]])"); await E("__T.step(5,0.1)")
         await mark("C8 出口：第二章完成", r, shot="done")
 
         # ---------- C10 笔记 ----------

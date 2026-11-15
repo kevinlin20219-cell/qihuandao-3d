@@ -240,9 +240,10 @@ async function boot() {
   if (defaults && !params.has('gray') && ![...params.keys()].some((k) => k.startsWith('model_'))) {
     for (const [k, v] of Object.entries(defaults)) { const k2 = k.startsWith('anim_') || k.startsWith('prop_') || k.startsWith('env_') || k.startsWith('fix_') || k.startsWith('flag') || k.startsWith('griplib_') || k === 'butterflies' ? k : 'model_' + k; if (!params.has(k2)) params.set(k2, v); } // 地址里已有的（如 env_manifest 对比旧版）优先
   }
-  for (const [k, v] of params) {
-    const id = k.startsWith('model_') ? k.slice(6) : '';
-    if (id && game.actors[id]) {
+  // C12：第二章的佑佑、北北是进章节时才创建的，留一个入口给 Ch2Play 在创建后再套模型
+  const loadChar = (id: string, v: string) => {
+    if (!game.actors[id]) return;
+    { {
       import('./assets').then(async ({ loadGLB }) => {
         const m = await loadGLB(v);
         // ?fix_<id>=<idle_tracks.json>：替换某段动作里的几条骨骼轨道（0185：派派站立左手拇指朝前，只换 LeftHandThumb1）
@@ -297,8 +298,10 @@ async function boot() {
         (window as any).__qhd.look = look;
         (window as any).__qhd.models = { ...((window as any).__qhd.models || {}), [id]: { clips: m.animations.map((c) => c.name), ms: m.ms, triangles: m.triangles, meshes: m.meshes, materials: m.materials, textures: m.textures, size: m.bbox.getSize(new THREE.Vector3()).toArray(), min: m.bbox.min.toArray() } };
       }).catch((e) => console.error('模型加载失败', id, e));
-    }
-  }
+    } }
+  };
+  for (const [k, v] of params) { const id = k.startsWith('model_') ? k.slice(6) : ''; if (id && game.actors[id]) loadChar(id, v); }
+  (game as any).loadCharModel = (id: string) => { const v = params.get('model_' + id); if (v) loadChar(id, v); };
 
   // ?env_gate=<GLB>：第一章入口双锁石门换成 Codex 的模型（0069）
   const envGate = params.get('env_gate');

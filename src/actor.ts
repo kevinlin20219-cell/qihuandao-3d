@@ -211,7 +211,7 @@ export class Actor {
     const I = this.inter;
     let fi = 0;
     if (I) {
-      const wantI = speed > 0.6 ? null : this.interWant;
+      const wantI = speed > 0.6 || !this.interWant || !I.sets[this.interWant] ? null : this.interWant; // 没有这个片段的角色（如派派没有划桨）就不做
       if (wantI && (I.cur !== wantI || I.state === 'off' || I.state === 'exit') && !(I.cur === wantI && I.state === 'exit' && I.once)) this.startInter(wantI);
       if (I.cur) {
         const S = I.sets[I.cur];
