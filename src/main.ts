@@ -596,7 +596,7 @@ async function boot() {
   $('restart').addEventListener('click', () => { game.clearSave(); location.reload(); });
   $('again').addEventListener('click', () => { game.clearSave(); location.reload(); });
   addEventListener('keydown', (e) => { if (e.code === 'Escape') setPaused(!paused); });
-  document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && playing && !paused && !finished && lockWasOn) setPaused(true); lockWasOn = !!document.pointerLockElement; });
+  document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && playing && !paused && !finished && lockWasOn && !(window as any).__qhdPanel) setPaused(true); /* 第二章实验面板打开时会主动放开鼠标，不算暂停 */ lockWasOn = !!document.pointerLockElement; });
   let lockWasOn = false;
   document.addEventListener('visibilitychange', () => { if (document.hidden) setPaused(true); });
 
@@ -790,7 +790,7 @@ async function boot() {
     deerContactShade?.update(dt);
     cinematicFoliage.update(!!game.cinematic, camera.position.distanceTo(cam.target), !game.cinematic && !ov);
     (window as any).__qhd?.cull?.tick?.();
-    { const b = bloomOn(); bloom.enabled = b; if (b || gradePass) composer.render(); else renderer.render(scene, camera); } // v60：低画质只关泛光，保留 Output/调色（以前整个 composer 被跳过，画面偏蓝偏暗）
+    if (!(window as any).__qhdNoRender) { const b = bloomOn(); bloom.enabled = b; if (b || gradePass) composer.render(); else renderer.render(scene, camera); } // __qhdNoRender：自动测试推帧时只跑逻辑不画（云端软件渲染太慢） // v60：低画质只关泛光，保留 Output/调色（以前整个 composer 被跳过，画面偏蓝偏暗）
     (window as any).__qhd.frameStats = { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };
     (window as any).__qhd.frameMs = performance.now() - t0;
   }

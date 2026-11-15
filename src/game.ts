@@ -1,6 +1,7 @@
 import { readChapter, writeChapter, clearChapter, type ChapterId } from './runtime/chapter_save';
 import { buildChapter2Shell, type Ch2Shell } from './level/chapter2_shell';
-import { buildTracks, type Ch2Tracks, type ClueId } from './level/chapter2_tracks';
+import type { Ch2Tracks } from './level/chapter2_tracks';
+import { Ch2Play } from './level/chapter2_play';
 import { alignBridgeGrip, bridgeRailPoint } from './codex/bridge_grip_ik';
 import { setVineProgress } from './scene_manifest';
 import * as THREE from 'three';
@@ -116,7 +117,7 @@ export class Game {
   wind = { phase: 'calm' as 'calm' | 'warn' | 'gust', t: 4, strength: 0 };
   respawning = 0;
   cinematic: { t: number; dur: number; from: THREE.Vector3; to: THREE.Vector3; look: THREE.Vector3; onDone?: () => void; onTick?: (u: number) => void } | null = null;
-  private crumbs: THREE.Vector3[] = [];
+  crumbs: THREE.Vector3[] = [];
   /** 口令倒数：t 从 0 开始，第 0/1/2 秒依次喊「三、二、一」，「一」前后 shoutWin 秒内按 E 算对 */
   shout: { t: number; beat: number; target: 'bridge' | 'gate' } | null = null;
   get gateOpen() { return this.level.gate.opening; }
@@ -134,12 +135,12 @@ export class Game {
   ch2Cp = 'A_entry';
   /** 第二章计时（和第一章的 time 分开） */
   ch2Time = 0;
-  /** C3：第二章进度。tracks = 追踪水痕中；spotted = 三处线索看完，隔河看见佑佑和北北（C4 分队救援从这里接） */
-  ch2Stage: 'tracks' | 'spotted' = 'tracks';
-  ch2Tracks: Ch2Tracks | null = null;
-  /** 对岸的佑佑、北北（C3 只站着挥手；C4 起可以操作）。灰盒：还没有正式模型时用程序小人 */
-  ch2Friends: Actor[] = [];
-  private ch2Said = new Set<string>();
+  /** 第二章整章玩法（C3–C10），见 level/chapter2_play.ts */
+  ch2Play: Ch2Play | null = null;
+  /** 测试和旧代码用：第二章进度、线索、对岸伙伴 */
+  get ch2Stage() { return this.ch2Play?.s.stage ?? 'tracks'; }
+  get ch2Tracks(): Ch2Tracks | null { return this.ch2Play?.tracks ?? null; }
+  get ch2Friends(): Actor[] { return this.ch2Play?.extras ?? []; }
 
   constructor(ph: Physics, scene: THREE.Scene, ui: UI, input: Input) {
     this.ph = ph; this.scene = scene; this.ui = ui; this.input = input;
@@ -159,7 +160,7 @@ export class Game {
   noSave = false;
   save() {
     if (this.noSave) return; // ?jump 测试时不覆盖孩子的存档
-    if (this.chapter === 'ch2') { writeChapter('ch2', { v: 1, cp: this.ch2Cp, time: this.ch2Time, stage: this.ch2Stage, clues: this.ch2Tracks ? this.ch2Tracks.clues.filter((c) => c.found).map((c) => c.id) : [] }); return; } // 第二章独立存档段，不碰第一章的
+    if (this.chapter === 'ch2') { this.ch2Play?.save(); return; } // 第二章独立存档段，不碰第一章的
     writeChapter('ch1', { stage: this.stage, cp: this.cp, leaves: this.leaves, time: this.time, falls: this.falls, gate: this.gateOpen, bag: this.bag, got: this.level.pickups.filter((pk) => pk.taken).map((pk) => pk.id), rope: this.level.ropeclipFix.fixed } satisfies Save as unknown as Record<string, unknown>); // B1：版本化存档（runtime/chapter_save.ts）
   }
   /** 只清当前章节的存档段：在第二章里「从头再玩」不能把第一章的进度清掉 */
@@ -203,111 +204,27 @@ export class Game {
       this.ch2 = buildChapter2Shell(this.scene, this.ph);
       this.chapter = 'ch2';
       const s = readChapter('ch2'); this.ch2Time = s && typeof s.time === 'number' ? s.time : 0; this.ch2Cp = 'A_entry';
-      this.ch2Tracks = buildTracks(this.ch2.root); this.ch2Said.clear();
-      const found = new Set<string>(s && Array.isArray(s.clues) ? s.clues : []);
-      for (const c of this.ch2Tracks.clues) c.found = found.has(c.id);
-      this.ch2Stage = s && s.stage === 'spotted' ? 'spotted' : 'tracks';
       this.respawnAll();
-      if (this.ch2Stage === 'spotted') this.ch2ShowFriends(false);
-      this.ch2Objective();
-      if (this.ch2Stage === 'tracks' && found.size === 0) { this.ui.say('hanhan', '地上有好多痕迹……佑佑和北北会不会从这里走过？', 3.2); this.ui.say('tangtuan', '派派，用你的放大镜看看！', 2.4); }
+      this.ch2Play = new Ch2Play(this);
+      if (this.ch2Play.s.stage === 'tracks' && this.ch2Play.s.clues.length === 0) { this.ui.say('hanhan', '地上有好多痕迹……佑佑和北北会不会从这里走过？', 3.2); this.ui.say('tangtuan', '派派，用你的放大镜看看！', 2.4); }
       this.save();
     } else {
       this.chapter = 'ch1';
-      this.ch2Tracks?.dispose(); this.ch2Tracks = null;
-      for (const a of this.ch2Friends) a.dispose(this.ph); this.ch2Friends = [];
+      this.ch2Play?.dispose(); this.ch2Play = null;
       this.ch2?.dispose(); this.ch2 = null;
+      this.squad = CHAPTER1_SQUAD.slice(); if (!this.squad.includes(this.active)) this.active = this.squad[0];
+      this.ui.party(this.squad, this.active); this.ui.leaves(this.leaves);
       this.respawnAll();
       this.ui.objective(OBJECTIVES[this.stage]);
       this.save(); // 第一章的状态在第二章期间没动过，按原样写回，同时把「当前章节」改回第一章
     }
   }
 
-  /** 第二章空壳里的主循环：只有走、跳、换人、跟随、掉落重来，没有第一章的机关和提示 */
+  /** 第二章的主循环全部交给 Ch2Play（走、换队、各段玩法、提示、笔记） */
   private updateCh2(dt: number, t: number, camYaw: number) {
-    this.ch2Time += dt;
-    const inp = this.input, lead = this.leader;
-    const locked = this.respawning > 0;
-    for (let i = 0; i < this.squad.length; i++) if (inp.pressed('Digit' + (i + 1))) this.switchTo(this.squad[i]);
-    if (inp.pressed('Tab')) this.quickSwitch();
-    if (inp.pressed('Enter')) this.ui.skipLine();
-    if (!locked && inp.pressed('KeyQ')) this.ch2Skill();
-    const f = new THREE.Vector3(-Math.sin(camYaw), 0, -Math.cos(camYaw)), r = new THREE.Vector3(-f.z, 0, f.x), wish = new THREE.Vector3();
-    if (!locked) {
-      if (inp.down('KeyW') || inp.down('ArrowUp')) wish.add(f);
-      if (inp.down('KeyS') || inp.down('ArrowDown')) wish.sub(f);
-      if (inp.down('KeyD') || inp.down('ArrowRight')) wish.add(r);
-      if (inp.down('KeyA') || inp.down('ArrowLeft')) wish.sub(r);
-    }
-    const tw = (window as any).__qhdTestWish; if (tw && !locked) wish.set(tw.x, 0, tw.z); // 自动测试用：世界坐标方向（只在第二章）
-    if (wish.lengthSq() > 0) wish.normalize();
-    let speed = inp.down('ShiftLeft') || inp.down('ShiftRight') ? lead.def.run : lead.def.walk;
-    if (this.observing) speed *= 0.5;
-    lead.pose = this.observing ? 'observe' : 'idle'; lead.interWant = null; lead.lockYaw = false; lead.pushMoving = false;
-    lead.move(dt, wish.multiplyScalar(locked ? 0 : speed), !locked && inp.pressed('Space'));
-    this.updateFollowers(dt, false, () => false);
-    for (const a of Object.values(this.actors)) {
-      if (a.pos.y < -5 && this.respawning <= 0) { this.respawnSoon(a === lead ? 'hanhan' : null, '小心水！先回到岸上。'); break; }
-    }
-    if (this.respawning > 0) { this.respawning -= dt; if (this.respawning <= 0.35 && this.respawning + dt > 0.35) this.respawnAll(); if (this.respawning <= 0) this.ui.fade(false); }
-    for (const a of Object.values(this.actors)) { a.sync(dt, t); a.setActiveLook(a === lead); }
+    if (!this.ch2Play) return;
+    this.ch2Play.update(dt, t, camYaw);
     this.ch2?.update(dt, t);
-    this.ch2Tracks?.update(dt, t, this.observing && this.active === 'paipai');
-    this.ch2Clues();
-    for (const a of this.ch2Friends) { a.move(dt, new THREE.Vector3(), false); a.pose = 'cheer'; a.faceTo(lead.pos); a.sync(dt, t); }
-    this.updateKeys(false);
-  }
-
-  // ---------- 第二章 C3：追踪水痕 ----------
-  private ch2Objective() {
-    const n = this.ch2Tracks ? this.ch2Tracks.clues.filter((c) => c.found).length : 0;
-    this.ui.objective(this.ch2Stage === 'tracks'
-      ? `跟着地上的痕迹找佑佑和北北：换派派（按 3），按 Q 用放大镜看（线索 ${n}/3）`
-      : '找到佑佑和北北了！他们在对岸——分队救援还在搭建（下一步 C4）');
-  }
-  private ch2Skill() {
-    if (this.active !== 'paipai') {
-      if (this.ch2Stage === 'tracks') this.ui.say(this.active, '我看不出什么……派派眼睛最尖，让她来看看吧（按 3 换派派）。', 2.8, 'ch2_q_' + this.active);
-      return;
-    }
-    this.observing = !this.observing; this.ui.observe(this.observing);
-    if (this.observing && this.ch2Stage === 'tracks' && !this.ch2NearClue()) this.ui.say('paipai', '这里没什么……顺着地上的脚印再往前看看。', 2.4, 'ch2_pp_none_' + Math.round(this.leader.pos.x / 6) + '_' + Math.round(this.leader.pos.z / 6));
-  }
-  private ch2NearClue() {
-    if (!this.ch2 || !this.ch2Tracks) return null;
-    const O = this.ch2.world(0, 0, 0), p = this.leader.pos;
-    for (const c of this.ch2Tracks.clues) if (!c.found && Math.hypot(p.x - O.x - c.local.x, p.z - O.z - c.local.z) < c.radius) return c;
-    return null;
-  }
-  private ch2Clues() {
-    if (this.ch2Stage !== 'tracks' || !this.ch2Tracks || this.respawning > 0) return;
-    const c = this.ch2NearClue();
-    if (c && this.active === 'paipai' && this.observing) {
-      c.found = true;
-      this.ui.say('paipai', c.line, 3.2, undefined, true);
-      const n = this.ch2Tracks.clues.filter((x) => x.found).length;
-      if (n < 3) this.ui.say(n === 1 ? 'hanhan' : 'tangtuan', n === 1 ? '脚印还往前走呢，跟上！' : '快到河边了……', 2.2);
-      this.ch2Objective(); this.save();
-      if (n === 3) this.ch2Spotted();
-    } else if (c && this.active !== 'paipai' && !this.ch2Said.has('near_' + c.id)) {
-      this.ch2Said.add('near_' + c.id);
-      this.ui.say(this.active, '地上好像有什么……派派，你来看看？（按 3 换派派，按 Q）', 3, undefined, true);
-    }
-  }
-  /** 三处线索都看完：对岸出现佑佑和北北 */
-  private ch2Spotted() {
-    this.ch2Stage = 'spotted';
-    this.ch2ShowFriends(true);
-    this.ui.say('hanhan', '佑佑，北北！别急，我们一起想办法。', 3);
-    this.ui.say('youyou', '我们在这儿！这边的拉杆还能动。', 3);
-    this.ch2Objective(); this.save();
-  }
-  private ch2ShowFriends(_announce: boolean) {
-    if (!this.ch2 || this.ch2Friends.length) return;
-    // Codex v002：佑佑 (12,0,-9)、北北 (14,0,-11)，东岸伙伴台
-    const yy = new Actor(CHARS.youyou, this.ph, this.scene, this.ch2.world(12, 0.05, -9));
-    const bb = new Actor(CHARS.beibei, this.ph, this.scene, this.ch2.world(14, 0.05, -11));
-    this.ch2Friends = [yy, bb];
   }
 
   // ---------- 主循环 ----------
