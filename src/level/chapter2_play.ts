@@ -282,12 +282,13 @@ export class Ch2Play {
   // ======================= C12 美术（Codex 资产）=======================
   // 做法：灰盒的碰撞和玩法一律不动，只把灰盒方块换成透明、把 Codex 模型挂上去跟着动。?ch2art=0 或 ?gray=1 回到纯灰盒
   private art: { stones: THREE.Object3D[]; grayStones: THREE.Object3D[]; seats: Partial<Record<CharId, THREE.Object3D>> } | null = null;
-  private disposed = false; private artObjs: THREE.Object3D[] = [];
+  private disposed = false; private artObjs: THREE.Object3D[] = []; private artMixers: THREE.AnimationMixer[] = [];
   private async loadArt() {
     const q = new URLSearchParams(location.search), base = q.get('ch2art') ?? (window as any).__DEFAULT_MODELS?.ch2art;
     if (!base || base === '0' || q.has('gray')) return;
     const { loadGLB } = await import('../assets');
-    const ld = (n: string) => loadGLB(base + n).then((m) => m.scene, (e) => { console.error('第二章美术加载失败', n, e); return null; });
+    const ldG = (n: string) => loadGLB(base + n).then((m) => m, (e) => { console.error('第二章美术加载失败', n, e); return null; });
+    const ld = (n: string) => ldG(n).then((m) => m?.scene ?? null);
     const [stoneM, sluiceM, raftM, dryM, soakM] = await Promise.all(['stones.wasm', 'sluice.wasm', 'raft.wasm', 'floatwood_dry.wasm', 'floatwood_soaked.wasm'].map(ld));
     if (this.disposed) return;
     const hide = new THREE.MeshBasicMaterial({ visible: false }); this.mats.push(hide);
@@ -314,15 +315,40 @@ export class Ch2Play {
       raftM.position.set(-c.x, -0.2 - box.min.y, -c.z); skin(this.raftMesh, raftM);
       for (const id of ALL5) { const mk = raftM.getObjectByName('MK_ch2_seat_' + id); if (mk) A.seats[id] = mk; }
     }
-    this.art = A; (window as any).__qhd.ch2art = { stones: A.stones.length, sluice: !!sluiceM, raft: !!raftM, seats: Object.keys(A.seats), floatwood: !!dryM && !!soakM };
+    this.art = A; // 先让第一批（稳石升降、木筏座位）生效，再等第二批
+    // ---- C12 第二批：大树 3 棵、远景 3 层、河岸岩石和倒木、实验小件（都只看不碰，放在可走区外或河边水里）----
+    const [t1, t2, t3, f1, f2, f3, rockM, logM, kitM] = await Promise.all(['tree1.wasm', 'tree2.wasm', 'tree3.wasm', 'far1.wasm', 'far2.wasm', 'far3.wasm', 'boulder.wasm', 'log.wasm', 'kit.wasm'].map(ldG));
+    if (this.disposed) return;
+    /** 按包围盒把模型摆好：高度缩到 h（或宽度缩到 w），底面贴 y，水平中心放到 (x,z) */
+    const place = (o: THREE.Object3D, x: number, y: number, z: number, opt: { h?: number; w?: number; s?: number; ry?: number }) => {
+      prep(o); o.rotation.y = opt.ry ?? 0; o.updateMatrixWorld(true);
+      const b = new THREE.Box3().setFromObject(o), sz = b.getSize(new THREE.Vector3());
+      const k = opt.s ?? (opt.h ? opt.h / Math.max(sz.y, 1e-3) : opt.w ? opt.w / Math.max(sz.x, sz.z, 1e-3) : 1);
+      o.scale.multiplyScalar(k); o.updateMatrixWorld(true); const b2 = new THREE.Box3().setFromObject(o), c = b2.getCenter(new THREE.Vector3());
+      o.position.x += x - c.x; o.position.z += z - c.z; o.position.y += y - b2.min.y; this.root.add(o); return o;
+    };
+    const anim = (g: { scene: THREE.Object3D; animations: THREE.AnimationClip[] } | null, o: THREE.Object3D) => {
+      if (!g?.animations?.length) return; const mx = new THREE.AnimationMixer(o); for (const c of g.animations) mx.clipAction(c).play(); mx.update(Math.random() * 3); this.artMixers.push(mx);
+    };
+    // 大树：用户 11-15 定 3 棵。西岸营火北边、西岸上游、东岸，都在可走区外一点，树冠伸到路上
+    ([[t1, -26.5, 9, 0.6], [t2, 27, -4, 2.4], [t3, -28.5, -30, 4.2]] as const).forEach(([g, x, z, ry], i) => { if (g) { place(g.scene, x, -0.1, z, { h: 10 + i * 0.8, ry }); g.scene.name = 'ch2_art_tree_' + (i + 1); anim(g, g.scene); } });
+    // 远景：西、东、北三面各一层，离河 60–90 米，只当背景
+    ([[f1, -78, -5, Math.PI / 2], [f2, 80, 10, -Math.PI / 2], [f3, 20, 120, Math.PI]] as const).forEach(([g, x, z, ry], i) => { if (g) { place(g.scene, x, -2, z, { w: 110, ry }); g.scene.name = 'ch2_art_far_' + (i + 1); anim(g, g.scene); } });
+    // 河岸岩石 / 倒木：放在河边水里（河是 x −6..6），不挡任何路
+    if (rockM) ([[-5.3, -31, 1.6, 0.3], [5.4, -17, 1.3, 1.9], [-5.4, 19, 1.5, 4.0], [5.3, 25, 1.8, 2.7], [5.5, -36, 1.2, 5.1]] as const).forEach(([x, z, sc, ry], i) => place(i ? rockM.scene.clone() : rockM.scene, x, CH2_WATER_Y - 0.35, z, { s: sc, ry }));
+    if (logM) ([[-4.8, 26, 3.2, 0.25], [4.9, -27, 2.8, -0.35]] as const).forEach(([x, z, sc, ry], i) => place(i ? logM.scene.clone() : logM.scene, x, CH2_WATER_Y - 0.12, z, { s: sc, ry }));
+    // 实验小件：摆在试水槽北边岸上（三个样品、三槽、配重和练习圆石）
+    if (kitM) place(kitM.scene, -11.2, 0, 13.2, { s: 1, ry: Math.PI / 2 });
+    (window as any).__qhd.ch2art = { trees: [t1, t2, t3].filter(Boolean).length, far: [f1, f2, f3].filter(Boolean).length, rocks: !!rockM, logs: !!logM, kit: !!kitM, stones: A.stones.length, sluice: !!sluiceM, raft: !!raftM, seats: Object.keys(A.seats), floatwood: !!dryM && !!soakM };
   }
-  private updateArt() {
+  private updateArt(dt = 0) {
+    for (const mx of this.artMixers) mx.update(dt);
     const A = this.art; if (!A || !A.grayStones.length) return;
     A.stones.forEach((o, k) => { const g0 = A.grayStones[k * 4]; if (g0) o.position.y = g0.position.y + 0.5 - STONE_TOPS[0]; });
   }
 
   update(dt: number, t: number, camYaw: number) {
-    this.updateArt();
+    this.updateArt(dt);
     const g = this.g, inp = g.input, lead = g.leader, s = this.s;
     g.ch2Time += dt;
     const panel = !!this.panelEl;
@@ -1018,7 +1044,7 @@ export class Ch2Play {
   dispose() {
     this.disposed = true;
     { const seen = new Set<unknown>(); for (const o of this.artObjs) { o.removeFromParent(); o.traverse((c) => { const m = c as THREE.Mesh; if (!m.isMesh) return; if (!seen.has(m.geometry)) { seen.add(m.geometry); m.geometry.dispose(); }
-      for (const mt of ([] as THREE.Material[]).concat(m.material)) { if (seen.has(mt)) continue; seen.add(mt); for (const v of Object.values(mt)) if ((v as THREE.Texture)?.isTexture && !seen.has(v)) { seen.add(v); (v as THREE.Texture).dispose(); } mt.dispose(); } }); } this.artObjs = []; this.art = null; }
+      for (const mt of ([] as THREE.Material[]).concat(m.material)) { if (seen.has(mt)) continue; seen.add(mt); for (const v of Object.values(mt)) if ((v as THREE.Texture)?.isTexture && !seen.has(v)) { seen.add(v); (v as THREE.Texture).dispose(); } mt.dispose(); } }); } this.artObjs = []; this.art = null; for (const mx of this.artMixers) mx.stopAllAction(); this.artMixers = []; }
     // 文件缓存（THREE.Cache 留着原始 GLB 字节）：第二章专用的模型离开时一起清掉，下次进章节从浏览器缓存重新读
     for (const k of Object.keys((THREE.Cache as any).files)) if (/ch2_art|youyou|beibei/.test(k)) THREE.Cache.remove(k);
     const g = this.g;
