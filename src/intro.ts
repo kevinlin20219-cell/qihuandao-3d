@@ -104,12 +104,31 @@ export function setupIntro() {
     if (resume) waitScreen(); else playIntro();
     tryEnter();
   };
-  startBtn.addEventListener('click', () => go(hasSave));
+  // 私有试玩页：开始画面右侧「第二章 · 灰盒试玩」（用户 11-10）。不放开场动画、不清第一章存档，加载好直接进第二章（main.ts 看 #chapter-2）
+  const ch2Btn = document.createElement('button'); ch2Btn.id = 'startCh2'; ch2Btn.textContent = '第二章 · 灰盒试玩 ›';
+  const ch2Base = 'z-index:40;padding:14px 18px;border-radius:14px;border:2px solid rgba(122,90,50,.8);background:rgba(246,239,220,.95);color:#24382b;font-size:17px;font-weight:600;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.18)';
+  const placeCh2 = () => { // 卡片右边放得下就放右边（竖直居中对齐卡片），放不下就放进卡片里「开始冒险」下面
+    const r = card.getBoundingClientRect();
+    if (innerWidth - r.right >= 230) { ch2Btn.style.cssText = `position:fixed;left:${Math.round(r.right + 20)}px;top:${Math.round(r.top + r.height / 2)}px;transform:translateY(-50%);` + ch2Base; if (ch2Btn.parentElement !== document.getElementById('title')) (document.getElementById('title') as HTMLElement).appendChild(ch2Btn); }
+    else { ch2Btn.style.cssText = 'display:block;width:100%;margin-top:10px;' + ch2Base + ';box-shadow:none'; if (ch2Btn.previousElementSibling !== (fresh ?? startBtn)) (fresh ?? startBtn).after(ch2Btn); }
+  };
+  placeCh2(); addEventListener('resize', placeCh2); requestAnimationFrame(placeCh2);
+  // 进第二章不放剪纸动画（用户 11-10）：还没加载完就留在简介卡上显示进度，加载好直接进
+  let ch2Chosen = false;
+  const goCh2 = () => {
+    ch2Chosen = true;
+    try { history.replaceState(null, '', '#chapter-2'); } catch { location.hash = 'chapter-2'; }
+    choice = true; animDone = true; label = '正在准备第二章';
+    for (const x of [startBtn, fresh, ch2Btn]) if (x) x.disabled = true;
+    ch2Btn.textContent = '正在准备第二章…'; paint(); tryEnter();
+  };
+  ch2Btn.addEventListener('click', (e) => { e.stopPropagation(); goCh2(); });
+  startBtn.addEventListener('click', () => (location.hash === '#chapter-2' ? goCh2() : go(hasSave)));
   fresh?.addEventListener('click', () => go(false));
 
   return {
     /** 加载进度 0–1 */
-    setProgress(p: number, text?: string) { progress = Math.max(progress, Math.min(1, p)); if (text) label = text; paint(); },
+    setProgress(p: number, text?: string) { progress = Math.max(progress, Math.min(1, p)); if (text && !ch2Chosen) label = text; paint(); },
     /** 角色和关卡都好了（boot 走到最后） */
     ready(o: StartOpts) { opts = o; paint(); tryEnter(); setTimeout(() => { if (!envOk) { envOk = true; console.warn('森林加载超过 3 分钟，先进入游戏，剩下的边走边加载'); tryEnter(); } }, 180000); },
     /** 森林场景（清单）全部加载好 */

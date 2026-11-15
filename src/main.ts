@@ -240,9 +240,10 @@ async function boot() {
   if (defaults && !params.has('gray') && ![...params.keys()].some((k) => k.startsWith('model_'))) {
     for (const [k, v] of Object.entries(defaults)) { const k2 = k.startsWith('anim_') || k.startsWith('prop_') || k.startsWith('env_') || k.startsWith('fix_') || k.startsWith('flag') || k.startsWith('griplib_') || k === 'butterflies' ? k : 'model_' + k; if (!params.has(k2)) params.set(k2, v); } // 地址里已有的（如 env_manifest 对比旧版）优先
   }
-  for (const [k, v] of params) {
-    const id = k.startsWith('model_') ? k.slice(6) : '';
-    if (id && game.actors[id]) {
+  // C12：第二章的佑佑、北北是进章节时才创建的，留一个入口给 Ch2Play 在创建后再套模型
+  const loadChar = (id: string, v: string) => {
+    if (!game.actors[id]) return;
+    { {
       import('./assets').then(async ({ loadGLB }) => {
         const m = await loadGLB(v);
         // ?fix_<id>=<idle_tracks.json>：替换某段动作里的几条骨骼轨道（0185：派派站立左手拇指朝前，只换 LeftHandThumb1）
@@ -297,8 +298,10 @@ async function boot() {
         (window as any).__qhd.look = look;
         (window as any).__qhd.models = { ...((window as any).__qhd.models || {}), [id]: { clips: m.animations.map((c) => c.name), ms: m.ms, triangles: m.triangles, meshes: m.meshes, materials: m.materials, textures: m.textures, size: m.bbox.getSize(new THREE.Vector3()).toArray(), min: m.bbox.min.toArray() } };
       }).catch((e) => console.error('模型加载失败', id, e));
-    }
-  }
+    } }
+  };
+  for (const [k, v] of params) { const id = k.startsWith('model_') ? k.slice(6) : ''; if (id && game.actors[id]) loadChar(id, v); }
+  (game as any).loadCharModel = (id: string) => { const v = params.get('model_' + id); if (v) loadChar(id, v); };
 
   // ?env_gate=<GLB>：第一章入口双锁石门换成 Codex 的模型（0069）
   const envGate = params.get('env_gate');
@@ -547,6 +550,9 @@ async function boot() {
     }
     // ?jump=entry|crossroads|bridge|deer：测性能用，直接跳到第一章的几个地方（不存档）
     const jump = params.get('jump'); if (jump) jumpTo(jump);
+    // C1：?chapter=2 直接进第二章空壳（灰盒，只能走一走）；正式入口以后放在第一章通关页
+    // 私有试玩页在 claude.ai 里打开时网址参数传不进来，只有 #标记能传：网址末尾加 #chapter-2 也进第二章
+    if (params.get('chapter') === '2' || location.hash === '#chapter-2') game.enterChapter('ch2');
     const lp = game.leader.pos; cam.target.copy(lp).add(new THREE.Vector3(0, 1.3, 0));
     playing = true;
     renderer.domElement.focus();
@@ -564,6 +570,8 @@ async function boot() {
     cam.yaw = 0; cam.target.copy(game.leader.pos).add(new THREE.Vector3(0, 1.3, 0));
   }
   (window as any).__qhdJump = jumpTo;
+  // C1 测试用：__qhdChapter('ch2' | 'ch1') 切章；镜头跟到新位置
+  (window as any).__qhdChapter = (id: 'ch1' | 'ch2') => { game.enterChapter(id); cam.target.copy(game.leader.pos).add(new THREE.Vector3(0, 1.3, 0)); return { chapter: game.chapter, shell: game.ch2?.stats ?? null }; };
   // 调试：屏幕坐标（0–1）处是哪个网格、哪个材质
   (window as any).__qhdPick = (u: number, v: number) => { const rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(u * 2 - 1, 1 - v * 2), camera); const shown = (o: THREE.Object3D | null): boolean => !o || (o.visible && shown(o.parent)); const h = rc.intersectObjects(scene.children, true).find((x) => (x.object as THREE.Mesh).isMesh && shown(x.object) && x.object.parent?.name !== 'sun_rays'); if (!h) return null; const m = h.object as THREE.Mesh; const mat = ([] as THREE.Material[]).concat(m.material)[0] as THREE.MeshStandardMaterial; return { mesh: m.name, parent: m.parent?.name, mat: mat.name, color: mat.color?.getHexString(), map: !!mat.map, p: h.point.toArray().map((x) => +x.toFixed(2)) }; };
 
@@ -591,7 +599,7 @@ async function boot() {
   $('restart').addEventListener('click', () => { game.clearSave(); location.reload(); });
   $('again').addEventListener('click', () => { game.clearSave(); location.reload(); });
   addEventListener('keydown', (e) => { if (e.code === 'Escape') setPaused(!paused); });
-  document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && playing && !paused && !finished && lockWasOn) setPaused(true); lockWasOn = !!document.pointerLockElement; });
+  document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && playing && !paused && !finished && lockWasOn && !(window as any).__qhdPanel) setPaused(true); /* 第二章实验面板打开时会主动放开鼠标，不算暂停 */ lockWasOn = !!document.pointerLockElement; });
   let lockWasOn = false;
   document.addEventListener('visibilitychange', () => { if (document.hidden) setPaused(true); });
 
@@ -785,7 +793,7 @@ async function boot() {
     deerContactShade?.update(dt);
     cinematicFoliage.update(!!game.cinematic, camera.position.distanceTo(cam.target), !game.cinematic && !ov);
     (window as any).__qhd?.cull?.tick?.();
-    { const b = bloomOn(); bloom.enabled = b; if (b || gradePass) composer.render(); else renderer.render(scene, camera); } // v60：低画质只关泛光，保留 Output/调色（以前整个 composer 被跳过，画面偏蓝偏暗）
+    if (!(window as any).__qhdNoRender) { const b = bloomOn(); bloom.enabled = b; if (b || gradePass) composer.render(); else renderer.render(scene, camera); } // __qhdNoRender：自动测试推帧时只跑逻辑不画（云端软件渲染太慢） // v60：低画质只关泛光，保留 Output/调色（以前整个 composer 被跳过，画面偏蓝偏暗）
     (window as any).__qhd.frameStats = { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };
     (window as any).__qhd.frameMs = performance.now() - t0;
   }
