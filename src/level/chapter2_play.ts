@@ -190,10 +190,33 @@ export class Ch2Play {
     const d = document.createElement('div'); d.id = 'ch2hud';
     d.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:25;display:flex;gap:10px';
     d.innerHTML = '<button data-h="notes" style="padding:9px 14px;border-radius:12px;border:2px solid rgba(122,90,50,.7);background:rgba(246,239,220,.95);color:#24382b;font:600 15px sans-serif;cursor:pointer">📒 笔记 <kbd style="font-size:12px">N</kbd></button>'
-      + '<button data-h="hint" style="width:44px;height:44px;border-radius:50%;border:2px solid rgba(122,90,50,.7);background:rgba(246,239,220,.95);color:#24382b;font:800 20px sans-serif;cursor:pointer" title="提示（H）">？</button>';
+      + '<button data-h="hint" style="width:44px;height:44px;border-radius:50%;border:2px solid rgba(122,90,50,.7);background:rgba(246,239,220,.95);color:#24382b;font:800 20px sans-serif;cursor:pointer" title="提示（H）">？</button>'
+      + '<button data-h="jump" style="padding:9px 12px;border-radius:12px;border:2px solid rgba(122,90,50,.7);background:rgba(246,239,220,.95);color:#24382b;font:600 15px sans-serif;cursor:pointer" title="试玩用：直接跳到某一段">⏩ 跳段</button>';
     d.addEventListener('mousedown', (e) => e.stopPropagation());
-    d.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('button'); if (!b) return; e.stopPropagation(); if (b.dataset.h === 'hint') this.hint(); else this.openNotes(); });
+    d.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('button'); if (!b) return; e.stopPropagation(); if (b.dataset.h === 'hint') this.hint(); else if (b.dataset.h === 'jump') this.openJump(); else this.openNotes(); });
     document.body.appendChild(d); return d;
+  }
+
+  // ======================= 试玩跳段（用户 11-15：方便直接看 C12 美术）=======================
+  // 写一份对应阶段的存档，刷新页面后从开始画面进第二章就落在那一段；会覆盖第二章当前进度
+  private openJump() {
+    const all = MATS.map((m) => m.id), done = { float: { guess: null, concl: null, tries: 0, done: true } };
+    const base = (o: Partial<Save>): Save => Object.assign(FRESH(), o);
+    const P: Record<string, [string, Save, [number, number] | null]> = {
+      camp: ['营火开头（追水痕）', base({}), null],
+      rescue: ['分队救援（稳石、水闸）', base({ stage: 'spotted', clues: ['twig', 'prints', 'water'] }), [-9, -5]],
+      craft: ['收集材料、做木筏（浮木、佑佑北北）', base({ stage: 'reunited', clues: ['twig', 'prints', 'water'], segs: 3 }), [-10, 9]],
+      raft: ['上木筏（木筏、划桨）', base({ stage: 'reunited', clues: ['twig', 'prints', 'water'], segs: 3, taken: all, carry: { dry: 4, soaked: 2, rope: true, oar: true }, boathouse: true, crafted: true, ...done }), [-7, 4.5]],
+      turtle: ['石龟浅滩（杠杆实验）', base({ stage: 'turtle', clues: ['twig', 'prints', 'water'], segs: 3, taken: all, boathouse: true, crafted: true, raftSec: 3, ...done }), null],
+    };
+    const acts: Record<string, () => void> = { close: () => this.closePanel() };
+    for (const [k, [, sv, at]] of Object.entries(P)) acts[k] = () => {
+      sv.leaves = []; writeChapter('ch2', sv as unknown as Record<string, unknown>);
+      try { sessionStorage.setItem('qhd_ch2_at', at ? JSON.stringify(at) : ''); history.replaceState(null, '', '#chapter-2'); } catch { /* 存不了就只换存档 */ }
+      this.disposed = true; location.reload();
+    };
+    this.panel('⏩ 跳到某一段（试玩用）', '<p style="margin:0 0 8px">会覆盖第二章现在的进度。点了以后页面会刷新，再点开始画面右边的「第二章」进来。</p>'
+      + Object.entries(P).map(([k, [t]]) => `<p style="margin:6px 0"><button data-a="${k}">${t}</button></p>`).join('') + '<p><button data-a="close">取消</button></p>', acts);
   }
 
   // ======================= 存档 / 恢复 =======================
@@ -218,6 +241,7 @@ export class Ch2Play {
     if (s.stage === 'turtle' || s.stage === 'done') { this.setSquad(ALL5, 'tangtuan'); this.placeAll(LANDING); }
     else if (s.stage === 'reunited') { this.setSquad(ALL5, 'hanhan'); }
     this.refreshLeaves();
+    try { const at = sessionStorage.getItem('qhd_ch2_at'); sessionStorage.removeItem('qhd_ch2_at'); if (at) { const [x, z] = JSON.parse(at); this.placeAll(V(x, z)); } } catch { /* 没有跳段位置 */ }
   }
 
   // ======================= 队伍 =======================
