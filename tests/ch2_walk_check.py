@@ -14,7 +14,7 @@ PROBE = r"""(() => {
   const groundAt = (x, z) => { const f = new V(O.x + x, 5, O.z + z); const t = g.ph.ray(f, down, 8); return t == null ? null : 5 - t; };
   const inside = (r, x, z, m) => x > r[0] + m && x < r[1] - m && z > r[2] + m && z < r[3] - m;
   const res = { walk: {}, nowalk: {} };
-  for (const r of sh.layout.walk) { let n = 0, ok = 0, bad = []; for (let x = r.xz[0] + 0.8; x < r.xz[1] - 0.79; x += 1) for (let z = r.xz[2] + 0.8; z < r.xz[3] - 0.79; z += 1) { n++; const y = groundAt(x, z); if (y != null && Math.abs(y) < 0.02) ok++; else if (bad.length < 5) bad.push([x, z, y]); } res.walk[r.id] = { n, ok, bad }; }
+  for (const r of sh.layout.walk) { let n = 0, ok = 0, bad = []; for (let x = r.xz[0] + 0.8; x < r.xz[1] - 0.79; x += 1) for (let z = r.xz[2] + 0.8; z < r.xz[3] - 0.79; z += 1) { n++; const y = groundAt(x, z); if (y != null && y > -0.02) ok++; else if (bad.length < 5) bad.push([x, z, y]); } res.walk[r.id] = { n, ok, bad }; } // C4 起地上有船屋、试水槽、练习石：落在道具顶上（y>0）不算缺地，只查有没有洞
   for (const r of sh.layout.nowalk) { let n = 0, hit = 0, bad = []; for (let x = r.xz[0] + 0.3; x < r.xz[1] - 0.29; x += 1) for (let z = r.xz[2] + 0.3; z < r.xz[3] - 0.29; z += 1) { n++; const y = groundAt(x, z); if (y != null) { hit++; if (bad.length < 5) bad.push([x, z, y]); } } res.nowalk[r.id] = { n, hit, bad }; }
   // 连通：0.5 m 网格，从出生点出发；相邻两格都要有地（y≈0），且两格之间 0.4 m 高处的水平射线没被挡
   const S = 0.5, key = (i, j) => i + ',' + j, seen = new Set(), sp = sh.spawn.pos;

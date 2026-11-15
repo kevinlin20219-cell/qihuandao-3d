@@ -13,7 +13,7 @@ SNAP = """(()=>{const q=__qhd,g=q.game,i=q.renderer.info.memory;
   heap: performance.memory?Math.round(performance.memory.usedJSHeapSize/1048576*10)/10:null,
   colliders:q.ph.world.colliders.len(), shell: !!q.scene.getObjectByName('chapter2_shell'),
   lead:g.leader.pos.toArray().map(v=>+v.toFixed(2)), stage:g.stage, cp:g.cp, ch2cp:g.ch2Cp,
-  keys: document.getElementById('keys').innerText.replace(/\\s+/g,' '), say: !document.getElementById('say').hidden,
+  keys: document.getElementById('keys').innerText.replace(/\\s+/g,' '), say: document.getElementById('say').hidden ? '' : document.getElementById('say').innerText.replace(/\\s+/g,' '),
   save: JSON.parse(localStorage.getItem('qhd3d_save_v2')||'null')};})()"""
 
 async def main():
@@ -80,8 +80,9 @@ async def main():
         "walked_in_ch2_m": walked,
         "walk_ok": all(w > 1.0 for w in walked),
         "fresh_ch2_keys": fresh2["keys"], "fresh_ch2_say": fresh2["say"],
-        "fresh_ch2_clean": ("踏石" not in fresh2["keys"]) and ("口令" not in fresh2["keys"]) and not fresh2["say"],
-        "ch2_keys_clean": all(("踏石" not in x["keys"]) and not x["say"] for x in ch2s),
+        # C3 起进第二章会有涵涵的开场台词：只查有没有第一章残留的提示和台词
+        "fresh_ch2_clean": ("踏石" not in fresh2["keys"]) and ("口令" not in fresh2["keys"]) and ('吊桥' not in fresh2["say"]) and ('林子' not in fresh2["say"]) and ('三条' not in fresh2["say"]) and ('接着走' not in fresh2["say"]),
+        "ch2_keys_clean": all(("踏石" not in x["keys"]) and ('吊桥' not in x["say"]) and ('林子' not in x["say"]) and ('三条' not in x["say"]) and ('接着走' not in x["say"]) for x in ch2s),
         "errors": errs[:30],
         "geo_back_to_base": [x["geo"] - base["geo"] for x in log if x["chapter"] == "ch1"],
         "tex_back_to_base": [x["tex"] - base["tex"] for x in log if x["chapter"] == "ch1"],

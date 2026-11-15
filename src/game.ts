@@ -210,6 +210,7 @@ export class Game {
       this.save();
     } else {
       this.chapter = 'ch1';
+      this.ch2Play?.save(); // 离开前把第二章用时等写进存档（里程碑之间的时间也不丢）
       this.ch2Play?.dispose(); this.ch2Play = null;
       this.ch2?.dispose(); this.ch2 = null;
       this.squad = CHAPTER1_SQUAD.slice(); if (!this.squad.includes(this.active)) this.active = this.squad[0];
