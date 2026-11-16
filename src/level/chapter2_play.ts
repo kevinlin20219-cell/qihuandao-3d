@@ -4,6 +4,7 @@
 // 用户已定：分队时西岸由涵涵、东岸由佑佑发起全队动作；木筏上「用力」由佑佑喊；答错不惩罚。
 // 全部东西挂在第二章 shell 的 root 下；离开章节时 dispose() 释放自己建的网格、碰撞、DOM 面板和临时角色。
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Game } from '../game';
 import { Actor } from '../actor';
@@ -119,6 +120,9 @@ export class Ch2Play {
     this.exitCol = g.ph.box(sh.world(40, 1, 68.2), { x: 8, y: 2, z: 0.4 }); this.cols.push(this.exitCol);
     this.hud = this.buildHud();
     void this.loadArt();
+    // 佑佑、北北的模型一进第二章就开始下（会合时直接从缓存套上；国内慢，等到会合再下要好久）
+    { const q = new URLSearchParams(location.search), D = (window as any).__DEFAULT_MODELS || {};
+      for (const id of ['youyou', 'beibei']) { const u = q.get('model_' + id) ?? D[id]; if (u && !THREE.Cache.get(u)) new THREE.FileLoader().setResponseType('arraybuffer').load(u, undefined, undefined, () => { /* 失败了会合时再下 */ }); } }
     this.restore();
   }
 
@@ -135,7 +139,9 @@ export class Ch2Play {
       o.name = 'ch2_mat_' + m.id; o.castShadow = true; this.root.add(o); this.pickMeshes.set(m.id, o);
     }
   }
+  private bhGray: THREE.Object3D[] = [];
   private buildBoathouse() {
+    const n0 = this.root.children.length;
     const wall = this.std(0x7c6448), sh = this.g.ch2!, ph = this.g.ph;
     const box = (x: number, z: number, sx: number, sz: number, h = 2.2) => { const b = this.mesh(new THREE.BoxGeometry(sx, h, sz), wall); b.position.set(x, h / 2, z); b.castShadow = true; this.root.add(b); this.cols.push(ph.box(sh.world(x, h / 2, z), { x: sx, y: h, z: sz })); };
     box(-21, -14, 0.3, 4); box(-19, -16, 4, 0.3); box(-19, -12, 4, 0.3); box(-17, -15.4, 0.3, 1.2); box(-17, -12.6, 0.3, 1.2);
@@ -143,6 +149,7 @@ export class Ch2Play {
     this.door = this.mesh(new THREE.BoxGeometry(0.15, 2.0, 1.6), this.std(0x8a6a3e)); this.door.position.set(-17, 1.0, -14); this.root.add(this.door);
     const sign = this.mesh(new THREE.BoxGeometry(0.06, 0.4, 0.9), this.std(0xd8c49a)); sign.position.set(-16.9, 2.0, -14); this.root.add(sign);
     this.doorCol = ph.box(sh.world(-17, 1.0, -14), { x: 0.3, y: 2, z: 1.6 }); this.cols.push(this.doorCol);
+    this.bhGray = this.root.children.slice(n0);
   }
   private buildCove() {
     // C6 试水槽：码头边一个木水槽（不挖地，免得碰撞复杂）。三个样品一样大：干浮木、泡水木、石板
@@ -265,8 +272,23 @@ export class Ch2Play {
     const g = this.g;
     const keep = (id: CharId, on: boolean, p: THREE.Vector3 | null) => { const a = g.actors[id]; if (!a || !on || !p || g.active === id) return; a.goal = this.W(p, 0.05); a.holding = true; };
     keep('tangtuan', this.posted.brace, BRACE); keep('youyou', this.posted.lever, LEVER); keep('beibei', !!this.bbSpot, this.bbSpot);
+    if (this.s.stage === 'turtle') for (const [id, p] of Object.entries(this.tPost) as [CharId, THREE.Vector3][]) keep(id, true, p);
   }
-  private sw(id: CharId) { this.g.switchTo(id); this.repostAll(); }
+  // 石龟（用户 11-16）：①涵涵按 F 分站位：北北→西边听心跳、派派→东边看壳缝、汤团→南边压船桨；②自己走过去的人，换人后也留在站位上
+  private tPost: Partial<Record<CharId, THREE.Vector3>> = {};
+  private static T_ST: [CharId, THREE.Vector3, string][] = [['beibei', TOUCH_ST, '北北去石龟西边听心跳'], ['paipai', LOOK_ST, '派派去东边看壳缝'], ['tangtuan', PUSH_ST, '汤团去南边拿船桨']];
+  private turtleAssign() {
+    const g = this.g;
+    for (const [id, p] of Ch2Play.T_ST) if (g.actors[id] && g.active !== id) this.tPost[id] = p;
+    this.repostAll();
+    g.ui.say('hanhan', Ch2Play.T_ST.map((x) => x[2]).join('，') + '！到了以后换过去，按 Q 或 E。', 3.6, undefined, true);
+  }
+  private sw(id: CharId) {
+    const prev = this.g.active;
+    if (this.s.stage === 'turtle') { const st = Ch2Play.T_ST.find((x) => x[0] === prev); if (st && this.distL(st[1]) < 2.2) this.tPost[prev] = st[1]; }
+    delete this.tPost[id];
+    this.g.switchTo(id); this.repostAll();
+  }
   private setTeam(t: 'west' | 'east', who?: CharId) {
     this.lastActive[this.team] = this.g.active; this.team = t;
     this.setSquad(t === 'west' ? WEST : EAST, who ?? this.lastActive[t]);
@@ -281,7 +303,8 @@ export class Ch2Play {
   // ======================= 主循环 =======================
   // ======================= C12 美术（Codex 资产）=======================
   // 做法：灰盒的碰撞和玩法一律不动，只把灰盒方块换成透明、把 Codex 模型挂上去跟着动。?ch2art=0 或 ?gray=1 回到纯灰盒
-  private art: { stones: THREE.Object3D[]; grayStones: THREE.Object3D[]; seats: Partial<Record<CharId, THREE.Object3D>> } | null = null;
+  private art: { stones: THREE.Object3D[]; grayStones: THREE.Object3D[]; seats: Partial<Record<CharId, THREE.Object3D>>; banks?: number } | null = null;
+  private artDoor: { play(): void } | null = null; private artDoorAction: THREE.AnimationAction | null = null; private artDoorStop = 0; private artTumble: (() => void) | null = null;
   private disposed = false; private artObjs: THREE.Object3D[] = []; private artMixers: THREE.AnimationMixer[] = [];
   private async loadArt() {
     const q = new URLSearchParams(location.search), base = q.get('ch2art') ?? (window as any).__DEFAULT_MODELS?.ch2art;
@@ -339,16 +362,69 @@ export class Ch2Play {
     if (logM) ([[-4.8, 26, 3.2, 0.25], [4.9, -27, 2.8, -0.35]] as const).forEach(([x, z, sc, ry], i) => place(i ? logM.scene.clone() : logM.scene, x, CH2_WATER_Y - 0.12, z, { s: sc, ry }));
     // 实验小件：摆在试水槽北边岸上（三个样品、三槽、配重和练习圆石）
     if (kitM) place(kitM.scene, -11.2, 0, 13.2, { s: 1, ry: Math.PI / 2 });
-    (window as any).__qhd.ch2art = { trees: [t1, t2, t3].filter(Boolean).length, far: [f1, f2, f3].filter(Boolean).length, rocks: !!rockM, logs: !!logM, kit: !!kitM, stones: A.stones.length, sluice: !!sluiceM, raft: !!raftM, seats: Object.keys(A.seats), floatwood: !!dryM && !!soakM };
+    // ---- C12 第三批（0407/0409/0411，用户 11-16「先全部导入，不足先标记」）----
+    const [turtleG, bankG, bhG] = await Promise.all(['turtle.wasm', 'bank.wasm', 'boathouse.wasm'].map(ldG));
+    if (this.disposed) return;
+    // 石龟 v085：挂在灰盒龟身上（跟着灰盒的害怕摇晃 / 平静下来），最长边缩到 7 米；夹石是模型里独立的 EXPERIMENT_detachable_surface，石头撬开时播 0–4 秒翻落
+    if (turtleG) {
+      const T = this.turtle, o = prep(turtleG.scene); o.updateMatrixWorld(true);
+      const b = new THREE.Box3().setFromObject(o), sz = b.getSize(new THREE.Vector3()), k = 7 / Math.max(sz.x, sz.z);
+      o.scale.multiplyScalar(k); o.updateMatrixWorld(true); const b2 = new THREE.Box3().setFromObject(o), c = b2.getCenter(new THREE.Vector3());
+      o.position.set(-c.x, -T.body.position.y - b2.min.y + 0.05, -c.z); skin(T.body, o); T.stone.material = hide;
+      const mx = new THREE.AnimationMixer(o), idle = turtleG.animations.find((a) => /idle/i.test(a.name)), tumble = turtleG.animations.find((a) => /tumble/i.test(a.name));
+      if (idle) mx.clipAction(idle).play();
+      if (tumble) { const a = mx.clipAction(tumble); a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; this.artTumble = () => { a.reset().play(); }; if (this.s.turtle) { a.play(); a.time = tumble.duration; mx.update(0); } }
+      this.artMixers.push(mx);
+    }
+    // 船屋 v009：屋心 (-19,-14)、门朝东；灰盒墙和碰撞保留（只变透明），开门时播开门动画到 90° 停住
+    if (bhG) {
+      const o = place(bhG.scene, -19, 0, -14, { s: 1 }); for (const gm of this.bhGray) gm.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh) m.material = hide; });
+      const clip = bhG.animations[0];
+      if (clip) { const mx = new THREE.AnimationMixer(o), a = mx.clipAction(clip); a.play(); a.paused = true; a.time = 0; mx.update(0); this.artMixers.push(mx);
+        const openT = 24 / 24; this.artDoor = { play: () => { a.paused = false; a.time = 0; this.artDoorStop = openT; } }; this.artDoorAction = a;
+        if (this.s.boathouse) { a.time = openT; mx.update(0); } }
+    }
+    // 岸线 v001d：6 种变体，每段 4 米。只放在看得见的几段（营火边、过河处、码头、东岸），一整段连着时只留两头的端盖。
+    // 每段原来 100–190 个网格：不动的部分按材质合并成几块，减少绘制次数；风动的草还用原动画
+    if (bankG?.scenes?.length) {
+      const runs: [number, number, number, number, number][] = [ // [x, 起点z, 段数, 朝向(1=西岸 −1=东岸), 起始变体]
+        [-6, 18, 3, 1, 0], [-6, -14, 3, 1, 3], [6, -14, 3, -1, 1], [6, 2, 3, -1, 4], [-6, -30, 2, 1, 2], [6, -32, 2, -1, 5]];
+      let nSeg = 0;
+      for (const [x, z0, n, side, v0] of runs) for (let i = 0; i < n; i++) {
+        const vi = (v0 + i) % bankG.scenes.length, src = bankG.scenes[vi], o = src.clone(true);
+        o.traverse((c) => { if (/_CAP_L$/.test(c.name) && i > 0) c.visible = false; if (/_CAP_R$/.test(c.name) && i < n - 1) c.visible = false; });
+        o.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2; o.position.set(x, 0, z0 + side * 0 + (i + 0.5) * 4); prep(o); mergeStatic(o); this.root.add(o); nSeg++;
+        const clips = bankG.animations.filter((a) => a.name.endsWith(src.name.replace(/^VAR_bank/, '_')) || a.name.endsWith('_' + src.name.replace(/^VAR_bank_/, '')));
+        if (clips.length) { const mx = new THREE.AnimationMixer(o); for (const cl of clips) mx.clipAction(cl).play(); mx.update(Math.random() * 2); this.artMixers.push(mx); }
+      }
+      A.banks = nSeg;
+    }
+    // 急流的 3 块礁石和倒木：暂用河岸岩石 / 倒木的外观，碰撞和航线不动（0411）
+    if (rockM) for (const r of this.rocks) { const v = prep(rockM.scene.clone()); v.scale.setScalar(2.1); v.rotation.set(0, Math.random() * 6, 0); v.position.set(0, -0.6, 0); skin(r, v); }
+    if (logM) { const v = prep(logM.scene.clone()); v.scale.set(3.8, 2.4, 2.4); v.rotation.set(0, 0, Math.PI / 2); v.position.set(0.36, 0, 0); skin(this.log, v); }
+    (window as any).__qhd.ch2art = { banks: A.banks ?? 0, turtle: !!turtleG, boathouse: !!bhG, trees: [t1, t2, t3].filter(Boolean).length, far: [f1, f2, f3].filter(Boolean).length, rocks: !!rockM, logs: !!logM, kit: !!kitM, stones: A.stones.length, sluice: !!sluiceM, raft: !!raftM, seats: Object.keys(A.seats), floatwood: !!dryM && !!soakM };
   }
   private updateArt(dt = 0) {
     for (const mx of this.artMixers) mx.update(dt);
+    const da = this.artDoorAction; if (da && !da.paused && this.artDoorStop && da.time >= this.artDoorStop) { da.time = this.artDoorStop; da.paused = true; }
     const A = this.art; if (!A || !A.grayStones.length) return;
     A.stones.forEach((o, k) => { const g0 = A.grayStones[k * 4]; if (g0) o.position.y = g0.position.y + 0.5 - STONE_TOPS[0]; });
   }
 
+  // 背包（用户 11-16：第二章拿到的东西也要显示）：干浮木、湿浮木、绳子、船桨；做好木筏后显示木筏
+  private bagSig = '';
+  private refreshBag() {
+    const s = this.s, c = s.carry, sig = [c.dry, c.soaked, c.rope, c.oar, s.crafted].join();
+    if (sig === this.bagSig) return; this.bagSig = sig;
+    const it: { icon: string; name: string }[] = [];
+    if (s.crafted) it.push({ icon: '🛶', name: '小木筏' });
+    else { if (c.dry) it.push({ icon: '🪵', name: `干木×${c.dry}` }); if (c.soaked) it.push({ icon: '💧', name: `湿木×${c.soaked}` }); if (c.rope) it.push({ icon: '🪢', name: '绳子' }); }
+    if (c.oar) it.push({ icon: '🚣', name: '船桨' });
+    this.g.ui.bag(it); const el = document.getElementById('bag'); if (el) el.style.bottom = '78px'; // 让开右下角的笔记 / ？ / 跳段按钮
+  }
+
   update(dt: number, t: number, camYaw: number) {
-    this.updateArt(dt);
+    this.updateArt(dt); this.refreshBag();
     const g = this.g, inp = g.input, lead = g.leader, s = this.s;
     g.ch2Time += dt;
     const panel = !!this.panelEl;
@@ -530,7 +606,7 @@ export class Ch2Play {
   private callF() {
     const g = this.g, s = this.s;
     if (this.raft) { this.raftPaddle(); return; }
-    if (s.stage !== 'spotted' || this.window || this.shout) { if (s.stage === 'turtle') g.ui.say(g.active, '石龟这里听北北的心跳——汤团到南边按 E。', 2.4, 'f_turtle'); return; }
+    if (s.stage !== 'spotted' || this.window || this.shout) { if (s.stage === 'turtle') { if (g.active === 'hanhan' && !s.turtle) this.turtleAssign(); else g.ui.say(g.active, '要分站位得涵涵来喊——按 2 换涵涵再按 F。', 2.4, 'f_turtle'); } return; }
     const captain: CharId = this.team === 'west' ? 'hanhan' : 'youyou', cn = CHARS[captain].name;
     if (g.active !== captain) { g.ui.say(g.active, `大家一起做的事，得${cn}来喊——按 ${g.squad.indexOf(captain) + 1} 换${cn}。`, 2.6, undefined, true); this.stepErr++; return; }
     const k = s.segs, miss: string[] = [];
@@ -684,7 +760,7 @@ export class Ch2Play {
     g.ui.say('youyou', '木筏做好了！大家到码头边上筏。', 2.6);
     this.showRaftAtDock(); this.save(); this.progress();
   }
-  private openDoor() { this.door.visible = false; if (this.doorCol) { this.g.ph.remove(this.doorCol); this.cols.splice(this.cols.indexOf(this.doorCol), 1); this.doorCol = null; } }
+  private openDoor() { this.door.visible = false; this.artDoor?.play(); if (this.doorCol) { this.g.ph.remove(this.doorCol); this.cols.splice(this.cols.indexOf(this.doorCol), 1); this.doorCol = null; } }
 
   // ======================= C6 浮力实验 =======================
   private openFloat() {
@@ -831,7 +907,7 @@ export class Ch2Play {
   }
   private calmTurtle(quiet: boolean) {
     const g = this.g, s = this.s, T = this.turtle;
-    s.turtle = true; T.pop = quiet ? 1 : 0.0001; T.calm = quiet ? 1 : 0.0001;
+    s.turtle = true; if (!quiet) this.artTumble?.(); T.pop = quiet ? 1 : 0.0001; T.calm = quiet ? 1 : 0.0001;
     if (quiet) { T.stone.visible = false; }
     if (this.exitCol) { g.ph.remove(this.exitCol); this.cols.splice(this.cols.indexOf(this.exitCol), 1); this.exitCol = null; }
     g.ch2!.gates.turtle_rim.setOpen(true);
@@ -1043,6 +1119,7 @@ export class Ch2Play {
   // ======================= 释放 =======================
   dispose() {
     this.disposed = true;
+    { this.g.ui.bag([]); const el = document.getElementById('bag'); if (el) el.style.bottom = '20px'; }
     { const seen = new Set<unknown>(); for (const o of this.artObjs) { o.removeFromParent(); o.traverse((c) => { const m = c as THREE.Mesh; if (!m.isMesh) return; if (!seen.has(m.geometry)) { seen.add(m.geometry); m.geometry.dispose(); }
       for (const mt of ([] as THREE.Material[]).concat(m.material)) { if (seen.has(mt)) continue; seen.add(mt); for (const v of Object.values(mt)) if ((v as THREE.Texture)?.isTexture && !seen.has(v)) { seen.add(v); (v as THREE.Texture).dispose(); } mt.dispose(); } }); } this.artObjs = []; this.art = null; for (const mx of this.artMixers) mx.stopAllAction(); this.artMixers = []; }
     // 文件缓存（THREE.Cache 留着原始 GLB 字节）：第二章专用的模型离开时一起清掉，下次进章节从浏览器缓存重新读
@@ -1057,3 +1134,27 @@ export class Ch2Play {
 }
 
 export { CH2_SPAWN };
+
+/** C12 岸线：把不跟风动的网格按材质合并（每段 100–190 个网格 → 几个），不改外观。风动节点（WIND_ 下面）不动 */
+function mergeStatic(root: THREE.Object3D) {
+  root.updateMatrixWorld(true); const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const groups = new Map<string, { mat: THREE.Material; geos: THREE.BufferGeometry[]; meshes: THREE.Mesh[] }>();
+  root.traverse((o) => {
+    const m = o as THREE.Mesh; if (!m.isMesh || (m as any).isSkinnedMesh || !m.visible || Array.isArray(m.material)) return;
+    for (let p: THREE.Object3D | null = m; p && p !== root; p = p.parent) if (/^WIND_|^ANIM_/.test(p.name) || !p.visible) return;
+    const g = m.geometry, key = (m.material as THREE.Material).uuid + '|' + Object.keys(g.attributes).sort().join(',') + '|' + (g.index ? 'i' : 'n');
+    let e = groups.get(key); if (!e) groups.set(key, (e = { mat: m.material as THREE.Material, geos: [], meshes: [] }));
+    const c = g.clone(); for (const k of Object.keys(c.morphAttributes)) delete c.morphAttributes[k];
+    // 压缩后的顶点是归一化整数（KHR_mesh_quantization），直接乘矩阵会被截到 ±1 → 先转成浮点
+    for (const [k, at] of Object.entries(c.attributes) as [string, THREE.BufferAttribute][]) if (at.normalized || !(at.array instanceof Float32Array) || (at as any).isInterleavedBufferAttribute) {
+      const n = at.count, sz = at.itemSize, f = new Float32Array(n * sz); for (let i = 0; i < n; i++) for (let j = 0; j < sz; j++) f[i * sz + j] = at.getComponent(i, j); c.setAttribute(k, new THREE.BufferAttribute(f, sz));
+    }
+    c.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld)); e.geos.push(c); e.meshes.push(m);
+  });
+  for (const e of groups.values()) {
+    if (e.geos.length < 2) { for (const g of e.geos) g.dispose(); continue; }
+    const merged = mergeGeometries(e.geos, false); for (const g of e.geos) g.dispose(); if (!merged) continue;
+    const mm = new THREE.Mesh(merged, e.mat); mm.castShadow = true; mm.receiveShadow = true; mm.name = 'merged_static'; root.add(mm);
+    for (const m of e.meshes) m.removeFromParent();
+  }
+}
