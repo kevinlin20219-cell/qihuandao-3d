@@ -215,7 +215,7 @@ export class Game {
       this.ch2Play?.dispose(); this.ch2Play = null;
       this.ch2?.dispose(); this.ch2 = null;
       this.squad = CHAPTER1_SQUAD.slice(); if (!this.squad.includes(this.active)) this.active = this.squad[0];
-      this.ui.party(this.squad, this.active); this.ui.leaves(this.leaves);
+      this.ui.party(this.squad, this.active); this.ui.leaves(this.leaves); this.ui.bag(this.bag.map((i) => ITEMS[i])); // 回第一章：背包换回第一章的东西
       this.respawnAll();
       this.ui.objective(OBJECTIVES[this.stage]);
       this.save(); // 第一章的状态在第二章期间没动过，按原样写回，同时把「当前章节」改回第一章
