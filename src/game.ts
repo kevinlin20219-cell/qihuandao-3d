@@ -197,7 +197,6 @@ export class Game {
   /** 切到第二章空壳 / 回到第一章。第二章每次进入都新建、离开时整章释放；第一章保留原样（阶段、背包、存档都不变） */
   enterChapter(id: ChapterId) {
     if (id === this.chapter) return;
-    (window as any).__qhdEnvPause = id === 'ch2'; // 第二章里暂停第一章场景下载（scene_manifest.ts）
     this.cinematic = null; this.shout = null; this.observing = false; this.pickSlide = null; this.respawning = 0; this.ui.fade(false);
     this.ui.clearLines(); this.ui.countEnd(); this.ui.hold(null, 0); this.ui.xray(null); this.ui.warn(false); this.ui.observe(false); this.ui.crosshair(false);
     for (const a of Object.values(this.actors)) { a.goal = null; a.holding = false; }
