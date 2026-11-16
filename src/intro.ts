@@ -131,7 +131,7 @@ export function setupIntro() {
     /** 加载进度 0–1 */
     setProgress(p: number, text?: string) { progress = Math.max(progress, Math.min(1, p)); if (text && !ch2Chosen) label = text; paint(); },
     /** 角色和关卡都好了（boot 走到最后） */
-    ready(o: StartOpts) { opts = o; paint(); tryEnter(); setTimeout(() => { if (!envOk) { envOk = true; console.warn('森林加载超过 3 分钟，先进入游戏，剩下的边走边加载'); tryEnter(); } }, 180000); },
+    ready(o: StartOpts) { opts = o; paint(); tryEnter(); setTimeout(() => { if (!envOk) { envOk = true; label = '先进去玩，森林边走边加载'; paint(); console.warn('森林加载超过 40 秒，先进入游戏，剩下的边走边加载'); tryEnter(); } }, 40000); }, // 用户 11-16：国内下载慢卡在 30%，原来要等 3 分钟
     /** 森林场景（清单）全部加载好 */
     envReady() { envOk = true; progress = 1; paint(); tryEnter(); },
     hasSave,
