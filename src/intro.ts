@@ -71,7 +71,8 @@ export function setupIntro() {
     if (loadText) loadText.textContent = opts && envOk ? '' : `${label}… ${pct}%`;
   };
   const tryEnter = () => {
-    if (choice === null || !animDone || !opts || !envOk) return;
+    // 进第二章不用等第一章森林（用户 11-16：国内卡在 30%）：角色好了就进，第一章场景进第一章时再接着下
+    if (choice === null || !animDone || !opts || (!envOk && !ch2Chosen)) return;
     const o = opts; const resume = choice; choice = null;
     if (overlay) { overlay.style.transition = 'opacity .8s'; overlay.style.opacity = '0'; const ov = overlay, pl = player; setTimeout(() => { pl?.stop(); ov.remove(); }, 850); overlay = null; player = null; }
     if (!resume) o.clearSave();
