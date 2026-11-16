@@ -51,13 +51,7 @@ export async function loadGLB(url: string): Promise<LoadedModel> {
   const t0 = performance.now();
   const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   if (ktx2) loader.setKTX2Loader(ktx2);
-  // 国内连 GitHub 常常下到一半断掉（用户 11-16：佑佑北北模型没出来）：失败后隔 2 秒、5 秒再试两次
-  let gltf: Awaited<ReturnType<GLTFLoader['loadAsync']>> | undefined;
-  for (let k = 0; ; k++) {
-    try { gltf = await loader.loadAsync(url); break; } catch (e) {
-      if (k >= 2) throw e; THREE.Cache.remove(url); console.warn('模型下载失败，重试', url, e); await new Promise((r) => setTimeout(r, k ? 5000 : 2000));
-    }
-  }
+  const gltf = await loader.loadAsync(url);
   const scene = gltf.scene;
   let triangles = 0, meshes = 0;
   const mats = new Set<THREE.Material>(), texs = new Set<THREE.Texture>();

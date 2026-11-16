@@ -278,8 +278,6 @@ export async function applyManifest(level: Level, scene: THREE.Scene, url: strin
   const prefetch = (k: number) => { const it = man.items[k]; if (!it || (it.kind && it.kind !== 'static') || (Array.isArray(it.place) && !it.place.length)) return; const u = urlOf(it); if (!glbCache.has(u)) { const q = loadGLB(u); q.catch(() => glbCache.delete(u)); glbCache.set(u, q); } };
   manifestProgress.total += man.items.length;
   for (let k = 0; k < man.items.length; k++) {
-    // 在第二章时先停下第一章场景的下载，把网速让给第二章（回第一章再接着下）
-    while ((window as any).__qhdEnvPause) await new Promise((r) => setTimeout(r, 400));
     const it = man.items[k]; manifestProgress.done++;
     for (let j = 1; j <= 3; j++) prefetch(k + j); // 0310：后面几项先并行下载解码，公网上逐个等太慢
     const before = new Set(scene.children);
