@@ -410,25 +410,26 @@ export class Ch2Play {
     if (this.disposed) return;
     // 外缘草土坡（单网格，章节局部坐标）：盖住 16 段外侧直墙；墙的碰撞保留，只把墙变透明
     // 河边矮坎（灰盒蓝灰色）换成和土路接近的颜色，地面和岸线之间不再有一条灰边（碰撞不变）
-    { const done = new Set<THREE.Material>(); this.root.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh && /^ch2_(river|pool)_curb_/.test(c.name) && !Array.isArray(m.material) && !done.has(m.material)) { done.add(m.material); (m.material as THREE.MeshStandardMaterial).color?.setHex(0x9c8566); } }); }
+    { const done = new Set<THREE.Material>(); this.root.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh && /^ch2_(river|pool)_curb_/.test(c.name) && !Array.isArray(m.material) && !done.has(m.material)) { done.add(m.material); (m.material as THREE.MeshStandardMaterial).color?.setHex(0x9c8566); } if (m.isMesh && /^ch2_river_curb_/.test(c.name) && new URLSearchParams(location.search).has('curb0')) m.visible = false; /* 0429 要的对比：?curb0 只藏矮坎外观，碰撞照旧 */ }); }
     if (landG) { const o = prep(landG.scene); o.name = 'ch2_art_landform'; this.root.add(o); this.root.traverse((c) => { if (c.name.startsWith('ch2_berm_')) (c as THREE.Mesh).material = hide; }); }
     // 地面：每块可走区顶面换成「草地 / 土路」混合（黑白图：黑=土路，白=草），碰撞不变
     try {
       const tl = new THREE.TextureLoader(), lt = (n: string, srgb: boolean, rep2: boolean) => new Promise<THREE.Texture>((res, rej) => tl.load(base + 'gc/' + n, (t) => { if (srgb) t.colorSpace = THREE.SRGBColorSpace; if (rep2) t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; res(t); }, undefined, rej));
-      const [meadow, soil] = await Promise.all([lt('meadow_albedo_1024.png', true, true), lt('light_soil_albedo_512.png', true, true)]);
-      const O = this.g.ch2!.world(0, 0, 0); this.artTex.push(meadow, soil);
+      const [meadow, soil, meadowDk] = await Promise.all([lt('meadow_albedo_1024.png', true, true), lt('light_soil_albedo_512.png', true, true), lt('meadow_dark_1024.png', true, true)]);
+      const O = this.g.ch2!.world(0, 0, 0); this.artTex.push(meadow, soil, meadowDk);
       // 0425 水面贴图：白沫（R 当权重）、细波纹法线（OpenGL +Y），都按线性数据读
       if (this.waterU) { const W = this.waterU; Promise.all([lt('ch2_foam_mask_512.png', false, true), lt('ch2_ripple_normal_gl_512.png', false, true)]).then(([f, n]) => { if (this.disposed) { f.dispose(); n.dispose(); return; } this.artTex.push(f, n); W.uFoamT.value = f; W.uRipN.value = n; W.uHasT.value = 1; }, (e) => console.error('第二章水面贴图加载失败', e)); }
       for (const [id, rect] of GROUND_RECTS) {
         const mesh = this.root.getObjectByName('ch2_' + id) as THREE.Mesh | undefined; if (!mesh || Array.isArray(mesh.material)) continue;
-        const mask = await lt(id + '.png', false, false); if (this.disposed) return; this.artTex.push(mask);
+        const [mask, shade] = await Promise.all([lt(id + '.png', false, false), lt('shade/' + id + '.png', false, false)]); if (this.disposed) return; this.artTex.push(mask, shade); // 0429/0431：shade 0 浅草 / 255 深草
         const gm = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0 }); this.mats.push(gm);
         gm.onBeforeCompile = (sh) => {
-          Object.assign(sh.uniforms, { uMask: { value: mask }, uMeadow: { value: meadow }, uSoil: { value: soil }, uRect: { value: new THREE.Vector4(...rect) }, uO: { value: new THREE.Vector2(O.x, O.z) } });
+          Object.assign(sh.uniforms, { uMask: { value: mask }, uShade: { value: shade }, uMeadowDk: { value: meadowDk }, uMeadow: { value: meadow }, uSoil: { value: soil }, uRect: { value: new THREE.Vector4(...rect) }, uO: { value: new THREE.Vector2(O.x, O.z) } });
           sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-          sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW; uniform sampler2D uMask, uMeadow, uSoil; uniform vec4 uRect; uniform vec2 uO;')
+          sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW; uniform sampler2D uMask, uShade, uMeadowDk, uMeadow, uSoil; uniform vec4 uRect; uniform vec2 uO;')
             .replace('#include <map_fragment>', `vec2 lp = vGW.xz - uO; vec2 mu = vec2((lp.x - uRect.x) / (uRect.y - uRect.x), (lp.y - uRect.z) / (uRect.w - uRect.z));
-              float w = texture2D(uMask, clamp(mu, 0.001, 0.999)).r; vec3 md = mix(texture2D(uMeadow, lp / 7.0).rgb, texture2D(uMeadow, mat2(0.8, 0.6, -0.6, 0.8) * lp / 19.0).rgb, 0.45), sl = texture2D(uSoil, lp / 3.5).rgb;
+              float w = texture2D(uMask, clamp(mu, 0.001, 0.999)).r; float shd = texture2D(uShade, clamp(mu, 0.001, 0.999)).r; vec3 md0 = mix(texture2D(uMeadow, lp / 7.0).rgb, texture2D(uMeadow, mat2(0.8, 0.6, -0.6, 0.8) * lp / 19.0).rgb, 0.45);
+              vec3 md = mix(md0, mix(texture2D(uMeadowDk, lp / 7.0 + 0.31).rgb, texture2D(uMeadowDk, mat2(0.8, 0.6, -0.6, 0.8) * lp / 19.0).rgb, 0.45), shd * 0.85), sl = texture2D(uSoil, lp / 3.5).rgb;
               vec3 gcol = mix(sl, md, smoothstep(0.2, 0.8, w)); // 0425 新草土图按这个混合算的
               // 水边湿土带：离河（|x|<6）或石龟池 2.5 米以内逐渐变深、变湿
               float dRiver = (lp.y < 31.0 && lp.y > -42.0) ? abs(lp.x) - 6.0 : 99.0;
