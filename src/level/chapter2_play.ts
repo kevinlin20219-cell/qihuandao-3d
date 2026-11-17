@@ -156,7 +156,7 @@ export class Ch2Play {
     const tub = this.mesh(new THREE.BoxGeometry(1.3, 0.6, 2.6), this.std(0x8a6a44)); tub.position.set(COVE.x, 0.3, COVE.z); this.root.add(tub);
     this.cols.push(this.g.ph.box(this.W(COVE, 0.3), { x: 1.3, y: 0.6, z: 2.6 }));
     const water = this.mesh(new THREE.PlaneGeometry(1.1, 2.4), new THREE.MeshStandardMaterial({ color: 0x6fa3ad, transparent: true, opacity: 0.75, roughness: 0.2 }));
-    water.rotation.x = -Math.PI / 2; water.position.set(COVE.x, 0.62, COVE.z); this.root.add(water);
+    water.rotation.x = -Math.PI / 2; water.position.set(COVE.x, 0.56, COVE.z); // 0427：槽口高 0.60，水面放在槽口下面 this.root.add(water);
     // 三个样品沿水槽一字排开（北→南：干浮木、泡水木、石板），没放下水时摆在水槽西边的木板上
     const mk = (c: number, z: number) => { const m = this.mesh(new THREE.BoxGeometry(0.3, 0.18, 0.5), this.std(c)); m.position.set(COVE.x - 0.95, 0.95, COVE.z + z); m.userData.z = COVE.z + z; m.castShadow = true; this.root.add(m); return m; };
     const w = (z: number) => { const m = this.mesh(new THREE.SphereGeometry(0.09, 8, 6), this.std(0x8b8b86)); m.position.set(COVE.x - 1.25, 0.95, COVE.z + z); m.visible = false; this.root.add(m); return m; };
@@ -530,7 +530,7 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
   vec2 fl = vec2(lp.x * 1.3, lp.y * 0.55 - uT * 1.4);
   float rip = vn(fl * 1.6) * 0.6 + vn(fl * 4.1 + 7.0) * 0.4;
   float foam = 0.0;
-  for (int i = 0; i < ${N}; i++) { vec2 d = lp - uP[i].xy; d.y -= 0.35 * uP[i].z; float r = length(d * vec2(1.0, 0.75)); float ring = 1.0 - smoothstep(uP[i].z * 0.55, uP[i].z * 1.25, r); float fn = mix(vn(lp * 3.2 + vec2(0.0, -uT * 2.2)), texture2D(uFoamT, lp * 0.33 + vec2(0.0, -uT * 0.45)).r, uHasT); foam = max(foam, ring * smoothstep(0.35, 0.75, fn + ring * 0.25)); }
+  for (int i = 0; i < ${N}; i++) { vec2 d = lp - uP[i].xy; d.y -= 0.35 * uP[i].z; float r = length(d * vec2(1.0, 0.75)); float ring = 1.0 - smoothstep(uP[i].z * 0.55, uP[i].z * 1.25, r); float fn = mix(vn(lp * 3.2 + vec2(0.0, -uT * 2.2)), texture2D(uFoamT, lp * 0.33 + vec2(0.0, -uT * 0.45)).r, uHasT); foam = max(foam, ring * smoothstep(0.3, 0.7, fn * 0.8 + ring * 0.45)); }
   foam = max(foam, smoothstep(5.55, 5.95, abs(lp.x)) * step(lp.y, 30.0) * smoothstep(0.45, 0.8, vn(vec2(lp.x * 6.0, lp.y * 1.5 - uT * 1.8))));
   diffuseColor.rgb += (rip - 0.5) * 0.06;
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.96, 0.95), foam * 0.85);
@@ -1067,7 +1067,7 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
 
   // ======================= 道具动画 =======================
   private animProps(dt: number, t: number) {
-    const S = this.sample, base = 0.62;
+    const S = this.sample, base = 0.56;
     if (S.anim) {
       S.anim.t += dt; const u = Math.min(1, S.anim.t / 1.2), e = 1 - Math.pow(1 - u, 3);
       const wy = S.anim.mode === 'weight';
