@@ -122,6 +122,7 @@ export class Ch2Play {
     this.exitCol = g.ph.box(sh.world(40, 1, 68.2), { x: 8, y: 2, z: 0.4 }); this.cols.push(this.exitCol);
     this.hud = this.buildHud();
     void this.loadArt();
+    this.applyLook(); this.buildWater();
     this.restore();
   }
 
@@ -426,7 +427,14 @@ export class Ch2Play {
           sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW; uniform sampler2D uMask, uMeadow, uSoil; uniform vec4 uRect; uniform vec2 uO;')
             .replace('#include <map_fragment>', `vec2 lp = vGW.xz - uO; vec2 mu = vec2((lp.x - uRect.x) / (uRect.y - uRect.x), (lp.y - uRect.z) / (uRect.w - uRect.z));
               float w = texture2D(uMask, clamp(mu, 0.001, 0.999)).r; vec3 md = mix(texture2D(uMeadow, lp / 7.0).rgb, texture2D(uMeadow, mat2(0.8, 0.6, -0.6, 0.8) * lp / 19.0).rgb, 0.45), sl = texture2D(uSoil, lp / 3.5).rgb;
-              diffuseColor.rgb *= mix(sl, md, smoothstep(0.2, 0.8, w));`);
+              md *= vec3(0.9, 1.06, 0.84); // 草地往绿里压一点（Codex 换更绿的草地图后可去掉）
+              vec3 gcol = mix(sl, md, smoothstep(0.1, 0.6, w));
+              // 水边湿土带：离河（|x|<6）或石龟池 2.5 米以内逐渐变深、变湿
+              float dRiver = (lp.y < 31.0 && lp.y > -42.0) ? abs(lp.x) - 6.0 : 99.0;
+              vec2 pq = max(vec2(34.0, 52.0) - lp, lp - vec2(44.0, 60.0)); float dPool = length(max(pq, 0.0)) + min(max(pq.x, pq.y), 0.0);
+              float wet = 1.0 - smoothstep(0.0, 2.5, min(dRiver, abs(dPool)));
+              gcol = mix(gcol, vec3(0.36, 0.3, 0.22), wet * 0.8);
+              diffuseColor.rgb *= gcol;`);
         };
         const orig = mesh.material; mesh.material = [orig, orig, gm, orig, orig, orig]; this.artGround.push([mesh, orig]);
       }
@@ -476,7 +484,63 @@ export class Ch2Play {
     this.g.ui.bag(it); const el = document.getElementById('bag'); if (el) el.style.bottom = '78px'; // 让开右下角的笔记 / ？ / 跳段按钮
   }
 
+  // ======================= 第二章的光、雾、水（用户 11-17：环境美术意见里 Claude 负责的部分）=======================
+  private lookSaved: { exp: number; fog: [number, number, number] | null; lights: [THREE.Light, number][] } | null = null;
+  private applyLook() {
+    const q = (window as any).__qhd; if (!q?.renderer || new URLSearchParams(location.search).has('ch2look0')) return;
+    const r = q.renderer as THREE.WebGLRenderer, sc = q.scene as THREE.Scene, f = sc.fog as THREE.Fog | null;
+    const lights: [THREE.Light, number][] = []; sc.traverse((o) => { const l = o as THREE.Light; if (l.isLight) lights.push([l, l.intensity]); });
+    this.lookSaved = { exp: r.toneMappingExposure, fog: f ? [f.color.getHex(), f.near, f.far] : null, lights };
+    r.toneMappingExposure *= 0.9; // 降一点亮度
+    for (const [l, i] of lights) l.intensity = (l as THREE.HemisphereLight).isHemisphereLight || (l as THREE.AmbientLight).isAmbientLight ? i * 0.72 : (l as THREE.DirectionalLight).castShadow ? i * 1.08 : i * 0.8; // 环境光少一点、太阳略强 → 阴影更深、更立体
+    if (f) { f.color.setHex(0xc8d2c2); f.near = 32; f.far = 120; } // 远处一层偏青的薄雾，远景往后退
+  }
+  private restoreLook() {
+    const L = this.lookSaved, q = (window as any).__qhd; if (!L || !q?.renderer) return;
+    q.renderer.toneMappingExposure = L.exp; for (const [l, i] of L.lights) l.intensity = i;
+    const f = q.scene.fog as THREE.Fog | null; if (f && L.fog) { f.color.setHex(L.fog[0]); f.near = L.fog[1]; f.far = L.fog[2]; }
+    this.lookSaved = null;
+  }
+  /** 水面：顺流（往 +z）流动的细波纹、河中间深两边浅、稳石 / 礁石 / 倒木四周和急流段一圈白沫。只改河面材质，不碰玩法 */
+  private waterU: { uT: { value: number } } | null = null;
+  private buildWater() {
+    const w = this.root.getObjectByName('ch2_water') as THREE.Mesh | undefined; if (!w || new URLSearchParams(location.search).has('ch2water0')) return;
+    const m = w.material as THREE.MeshStandardMaterial, O = this.g.ch2!.world(0, 0, 0);
+    const pts: THREE.Vector3[] = [];
+    for (const seg of SEGMENTS) for (const x of seg) pts.push(new THREE.Vector3(x, STONE_Z, 0.75));
+    for (const r of this.rocks) pts.push(new THREE.Vector3(r.position.x, r.position.z, 1.3));
+    if (this.log) pts.push(new THREE.Vector3(this.log.position.x, this.log.position.z, 2.0));
+    for (let d = RAPID_D - 4; d <= RAPID_D + 4; d += 2) { const p = this.pathAt(d, 0); pts.push(new THREE.Vector3(p.x, p.z, 2.4)); }
+    const N = 24; while (pts.length < N) pts.push(new THREE.Vector3(9999, 9999, 0.01)); pts.length = N;
+    const U = { uT: { value: 0 } }; this.waterU = U;
+    m.transparent = true; m.opacity = 0.9; m.roughness = 0.12; m.color.setHex(0xffffff);
+    m.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, U, { uO: { value: new THREE.Vector2(O.x, O.z) }, uP: { value: pts } });
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWW;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vWW; uniform float uT; uniform vec2 uO; uniform vec3 uP[${N}];
+float hsh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return mix(mix(hsh(i), hsh(i+vec2(1,0)), f.x), mix(hsh(i+vec2(0,1)), hsh(i+vec2(1,1)), f.x), f.y); }`)
+        .replace('#include <map_fragment>', `vec2 lp = vWW.xz - uO;
+  float river = 1.0 - smoothstep(4.0, 6.2, abs(lp.x)) * step(lp.y, 30.0) * step(-42.0, lp.y);
+  vec3 deep = vec3(0.16, 0.34, 0.38), shal = vec3(0.42, 0.62, 0.58);
+  diffuseColor.rgb = mix(shal, deep, river * (1.0 - smoothstep(0.0, 5.5, abs(lp.x))) * 0.9 + 0.1);
+  vec2 fl = vec2(lp.x * 1.3, lp.y * 0.55 - uT * 1.4);
+  float rip = vn(fl * 1.6) * 0.6 + vn(fl * 4.1 + 7.0) * 0.4;
+  float foam = 0.0;
+  for (int i = 0; i < ${N}; i++) { vec2 d = lp - uP[i].xy; d.y -= 0.35 * uP[i].z; float r = length(d * vec2(1.0, 0.75)); float ring = 1.0 - smoothstep(uP[i].z * 0.55, uP[i].z * 1.25, r); foam = max(foam, ring * smoothstep(0.35, 0.75, vn(lp * 3.2 + vec2(0.0, -uT * 2.2)) + ring * 0.25)); }
+  foam = max(foam, smoothstep(5.55, 5.95, abs(lp.x)) * step(lp.y, 30.0) * smoothstep(0.45, 0.8, vn(vec2(lp.x * 6.0, lp.y * 1.5 - uT * 1.8))));
+  diffuseColor.rgb += (rip - 0.5) * 0.06;
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.96, 0.95), foam * 0.85);
+  diffuseColor.a = mix(diffuseColor.a, 1.0, foam * 0.8);`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+  { vec2 e = vec2(0.08, 0.0); float h0 = vn(fl * 1.6), hx = vn((fl + e.xy) * 1.6), hz = vn((fl + e.yx) * 1.6); normal = normalize(normal + vec3(h0 - hx, 0.0, h0 - hz) * 1.1); }`);
+    };
+    m.needsUpdate = true;
+  }
+
   update(dt: number, t: number, camYaw: number) {
+    if (this.waterU) this.waterU.uT.value += dt;
     this.updateArt(dt); this.refreshBag();
     const g = this.g, inp = g.input, lead = g.leader, s = this.s;
     g.ch2Time += dt;
@@ -1172,6 +1236,7 @@ export class Ch2Play {
   // ======================= 释放 =======================
   dispose() {
     this.disposed = true;
+    this.restoreLook();
     { this.g.ui.bag([]); const el = document.getElementById('bag'); if (el) el.style.bottom = '20px'; }
     { const seen = new Set<unknown>(); for (const o of this.artObjs) { o.removeFromParent(); o.traverse((c) => { const m = c as THREE.Mesh; if (!m.isMesh) return; if ((m as any).isInstancedMesh) (m as unknown as THREE.InstancedMesh).dispose(); if (!seen.has(m.geometry)) { seen.add(m.geometry); m.geometry.dispose(); }
       for (const mt of ([] as THREE.Material[]).concat(m.material)) { if (seen.has(mt)) continue; seen.add(mt); for (const v of Object.values(mt)) if ((v as THREE.Texture)?.isTexture && !seen.has(v)) { seen.add(v); (v as THREE.Texture).dispose(); } mt.dispose(); } }); } this.artObjs = []; this.art = null; for (const t of this.artTex) t.dispose(); this.artTex = []; for (const [m, o] of this.artGround) m.material = o; this.artGround = []; for (const mx of this.artMixers) mx.stopAllAction(); this.artMixers = []; }
