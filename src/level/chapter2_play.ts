@@ -417,6 +417,8 @@ export class Ch2Play {
       const tl = new THREE.TextureLoader(), lt = (n: string, srgb: boolean, rep2: boolean) => new Promise<THREE.Texture>((res, rej) => tl.load(base + 'gc/' + n, (t) => { if (srgb) t.colorSpace = THREE.SRGBColorSpace; if (rep2) t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; res(t); }, undefined, rej));
       const [meadow, soil] = await Promise.all([lt('meadow_albedo_1024.png', true, true), lt('light_soil_albedo_512.png', true, true)]);
       const O = this.g.ch2!.world(0, 0, 0); this.artTex.push(meadow, soil);
+      // 0425 水面贴图：白沫（R 当权重）、细波纹法线（OpenGL +Y），都按线性数据读
+      if (this.waterU) { const W = this.waterU; Promise.all([lt('ch2_foam_mask_512.png', false, true), lt('ch2_ripple_normal_gl_512.png', false, true)]).then(([f, n]) => { if (this.disposed) { f.dispose(); n.dispose(); return; } this.artTex.push(f, n); W.uFoamT.value = f; W.uRipN.value = n; W.uHasT.value = 1; }, (e) => console.error('第二章水面贴图加载失败', e)); }
       for (const [id, rect] of GROUND_RECTS) {
         const mesh = this.root.getObjectByName('ch2_' + id) as THREE.Mesh | undefined; if (!mesh || Array.isArray(mesh.material)) continue;
         const mask = await lt(id + '.png', false, false); if (this.disposed) return; this.artTex.push(mask);
@@ -427,8 +429,7 @@ export class Ch2Play {
           sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW; uniform sampler2D uMask, uMeadow, uSoil; uniform vec4 uRect; uniform vec2 uO;')
             .replace('#include <map_fragment>', `vec2 lp = vGW.xz - uO; vec2 mu = vec2((lp.x - uRect.x) / (uRect.y - uRect.x), (lp.y - uRect.z) / (uRect.w - uRect.z));
               float w = texture2D(uMask, clamp(mu, 0.001, 0.999)).r; vec3 md = mix(texture2D(uMeadow, lp / 7.0).rgb, texture2D(uMeadow, mat2(0.8, 0.6, -0.6, 0.8) * lp / 19.0).rgb, 0.45), sl = texture2D(uSoil, lp / 3.5).rgb;
-              md *= vec3(0.9, 1.06, 0.84); // 草地往绿里压一点（Codex 换更绿的草地图后可去掉）
-              vec3 gcol = mix(sl, md, smoothstep(0.1, 0.6, w));
+              vec3 gcol = mix(sl, md, smoothstep(0.2, 0.8, w)); // 0425 新草土图按这个混合算的
               // 水边湿土带：离河（|x|<6）或石龟池 2.5 米以内逐渐变深、变湿
               float dRiver = (lp.y < 31.0 && lp.y > -42.0) ? abs(lp.x) - 6.0 : 99.0;
               vec2 pq = max(vec2(34.0, 52.0) - lp, lp - vec2(44.0, 60.0)); float dPool = length(max(pq, 0.0)) + min(max(pq.x, pq.y), 0.0);
@@ -502,7 +503,7 @@ export class Ch2Play {
     this.lookSaved = null;
   }
   /** 水面：顺流（往 +z）流动的细波纹、河中间深两边浅、稳石 / 礁石 / 倒木四周和急流段一圈白沫。只改河面材质，不碰玩法 */
-  private waterU: { uT: { value: number } } | null = null;
+  private waterU: { uT: { value: number }; uFoamT: { value: THREE.Texture }; uRipN: { value: THREE.Texture }; uHasT: { value: number } } | null = null;
   private buildWater() {
     const w = this.root.getObjectByName('ch2_water') as THREE.Mesh | undefined; if (!w || new URLSearchParams(location.search).has('ch2water0')) return;
     const m = w.material as THREE.MeshStandardMaterial, O = this.g.ch2!.world(0, 0, 0);
@@ -512,13 +513,14 @@ export class Ch2Play {
     if (this.log) pts.push(new THREE.Vector3(this.log.position.x, this.log.position.z, 2.0));
     for (let d = RAPID_D - 4; d <= RAPID_D + 4; d += 2) { const p = this.pathAt(d, 0); pts.push(new THREE.Vector3(p.x, p.z, 2.4)); }
     const N = 24; while (pts.length < N) pts.push(new THREE.Vector3(9999, 9999, 0.01)); pts.length = N;
-    const U = { uT: { value: 0 } }; this.waterU = U;
+    const ph = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1); ph.needsUpdate = true; this.artTex.push(ph);
+    const U = { uT: { value: 0 }, uFoamT: { value: ph as THREE.Texture }, uRipN: { value: ph as THREE.Texture }, uHasT: { value: 0 } }; this.waterU = U;
     m.transparent = true; m.opacity = 0.9; m.roughness = 0.12; m.color.setHex(0xffffff);
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, U, { uO: { value: new THREE.Vector2(O.x, O.z) }, uP: { value: pts } });
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWW;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-varying vec3 vWW; uniform float uT; uniform vec2 uO; uniform vec3 uP[${N}];
+varying vec3 vWW; uniform float uT; uniform vec2 uO; uniform vec3 uP[${N}]; uniform sampler2D uFoamT, uRipN; uniform float uHasT;
 float hsh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return mix(mix(hsh(i), hsh(i+vec2(1,0)), f.x), mix(hsh(i+vec2(0,1)), hsh(i+vec2(1,1)), f.x), f.y); }`)
         .replace('#include <map_fragment>', `vec2 lp = vWW.xz - uO;
@@ -528,13 +530,15 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
   vec2 fl = vec2(lp.x * 1.3, lp.y * 0.55 - uT * 1.4);
   float rip = vn(fl * 1.6) * 0.6 + vn(fl * 4.1 + 7.0) * 0.4;
   float foam = 0.0;
-  for (int i = 0; i < ${N}; i++) { vec2 d = lp - uP[i].xy; d.y -= 0.35 * uP[i].z; float r = length(d * vec2(1.0, 0.75)); float ring = 1.0 - smoothstep(uP[i].z * 0.55, uP[i].z * 1.25, r); foam = max(foam, ring * smoothstep(0.35, 0.75, vn(lp * 3.2 + vec2(0.0, -uT * 2.2)) + ring * 0.25)); }
+  for (int i = 0; i < ${N}; i++) { vec2 d = lp - uP[i].xy; d.y -= 0.35 * uP[i].z; float r = length(d * vec2(1.0, 0.75)); float ring = 1.0 - smoothstep(uP[i].z * 0.55, uP[i].z * 1.25, r); float fn = mix(vn(lp * 3.2 + vec2(0.0, -uT * 2.2)), texture2D(uFoamT, lp * 0.33 + vec2(0.0, -uT * 0.45)).r, uHasT); foam = max(foam, ring * smoothstep(0.35, 0.75, fn + ring * 0.25)); }
   foam = max(foam, smoothstep(5.55, 5.95, abs(lp.x)) * step(lp.y, 30.0) * smoothstep(0.45, 0.8, vn(vec2(lp.x * 6.0, lp.y * 1.5 - uT * 1.8))));
   diffuseColor.rgb += (rip - 0.5) * 0.06;
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.96, 0.95), foam * 0.85);
   diffuseColor.a = mix(diffuseColor.a, 1.0, foam * 0.8);`)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-  { vec2 e = vec2(0.08, 0.0); float h0 = vn(fl * 1.6), hx = vn((fl + e.xy) * 1.6), hz = vn((fl + e.yx) * 1.6); normal = normalize(normal + vec3(h0 - hx, 0.0, h0 - hz) * 1.1); }`);
+  { vec2 e = vec2(0.08, 0.0); float h0 = vn(fl * 1.6), hx = vn((fl + e.xy) * 1.6), hz = vn((fl + e.yx) * 1.6); vec3 pn = vec3(h0 - hx, 0.0, h0 - hz) * 1.1;
+    vec3 tn = texture2D(uRipN, fl * 0.32).xyz * 2.0 - 1.0; vec3 tn2 = texture2D(uRipN, vec2(lp.x, lp.y + uT * 0.6) * 0.21 + 0.37).xyz * 2.0 - 1.0; vec3 txn = vec3(tn.x + tn2.x, 0.0, -(tn.y + tn2.y)) * 0.35;
+    normal = normalize(normal + mix(pn, txn, uHasT)); }`);
     };
     m.needsUpdate = true;
   }
@@ -588,6 +592,10 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
       // C12：有 Codex 正式模型时，守岗用共用交互动作（汤团双手顶撑杆、佑佑扳拉杆）；灰盒没有这些片段，自动忽略
       if (this.posted.brace && g.actors.tangtuan) g.actors.tangtuan.interWant = 'brace_door';
       if (this.posted.lever && g.actors.youyou) g.actors.youyou.interWant = 'pry';
+      // 守岗时脸朝向杆子（0427：佑佑扳拉杆的手要对得上杆，先把朝向固定；拉杆立杆在站位西边 0.6 m，撑杆顶在东边的闸门侧板上）
+      { const yy = g.actors.youyou, tt = g.actors.tangtuan;
+        if (this.posted.lever && yy && yy.pos.distanceTo(this.W(LEVER, yy.pos.y - this.g.ch2!.world(0, 0, 0).y)) < 0.45) yy.faceTo(this.W(V(LEVER.x - 0.6, LEVER.z), yy.pos.y));
+        if (this.posted.brace && tt && tt.pos.distanceTo(this.W(BRACE, tt.pos.y - this.g.ch2!.world(0, 0, 0).y)) < 0.45) tt.faceTo(this.W(V(BRACE.x + 0.9, BRACE.z), tt.pos.y)); }
       this.updateYouyouPath();
       this.checkFalls(dt);
     }
