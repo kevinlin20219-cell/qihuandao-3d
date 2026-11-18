@@ -153,10 +153,10 @@ export class Ch2Play {
   }
   private buildCove() {
     // C6 试水槽：码头边一个木水槽（不挖地，免得碰撞复杂）。三个样品一样大：干浮木、泡水木、石板
-    const tub = this.mesh(new THREE.BoxGeometry(1.3, 0.6, 2.6), this.std(0x8a6a44)); tub.position.set(COVE.x, 0.3, COVE.z); this.root.add(tub);
+    const tub = this.mesh(new THREE.BoxGeometry(1.3, 0.6, 2.6), this.std(0x8a6a44)); tub.position.set(COVE.x, 0.3, COVE.z); this.root.add(tub); this.tubMesh = tub;
     this.cols.push(this.g.ph.box(this.W(COVE, 0.3), { x: 1.3, y: 0.6, z: 2.6 }));
     const water = this.mesh(new THREE.PlaneGeometry(1.1, 2.4), new THREE.MeshStandardMaterial({ color: 0x6fa3ad, transparent: true, opacity: 0.75, roughness: 0.2 }));
-    water.rotation.x = -Math.PI / 2; water.position.set(COVE.x, 0.56, COVE.z); // 0427：槽口高 0.60，水面放在槽口下面 this.root.add(water);
+    water.rotation.x = -Math.PI / 2; water.position.set(COVE.x, 0.56, COVE.z); this.root.add(water); this.tubWater = water; // 0427：槽口高 0.60，水面放在槽口下面（v121b 时这句被注释吞掉了，水槽没水，11-18 修）
     // 三个样品沿水槽一字排开（北→南：干浮木、泡水木、石板），没放下水时摆在水槽西边的木板上
     const mk = (c: number, z: number) => { const m = this.mesh(new THREE.BoxGeometry(0.3, 0.18, 0.5), this.std(c)); m.position.set(COVE.x - 0.95, 0.95, COVE.z + z); m.userData.z = COVE.z + z; m.castShadow = true; this.root.add(m); return m; };
     const w = (z: number) => { const m = this.mesh(new THREE.SphereGeometry(0.09, 8, 6), this.std(0x8b8b86)); m.position.set(COVE.x - 1.25, 0.95, COVE.z + z); m.visible = false; this.root.add(m); return m; };
@@ -303,7 +303,10 @@ export class Ch2Play {
   // ======================= 主循环 =======================
   // ======================= C12 美术（Codex 资产）=======================
   // 做法：灰盒的碰撞和玩法一律不动，只把灰盒方块换成透明、把 Codex 模型挂上去跟着动。?ch2art=0 或 ?gray=1 回到纯灰盒
-  private art: { stones: THREE.Object3D[]; grayStones: THREE.Object3D[]; seats: Partial<Record<CharId, THREE.Object3D>>; banks?: number; plants?: { instances: number; meshes: number } } | null = null;
+  private art: { stones: THREE.Object3D[]; grayStones: THREE.Object3D[]; seats: Partial<Record<CharId, THREE.Object3D>>; banks?: number; plants?: { instances: number; meshes: number }; habitat?: number; props?: number } | null = null;
+  private ttRow: THREE.Object3D | null = null; private rowActs: THREE.AnimationAction[] = []; private rowOn = false;
+  private fireLight: THREE.PointLight | null = null; private tubMesh: THREE.Mesh | null = null; private tubWater: THREE.Mesh | null = null; private tubLevel = 0.56;
+  private setTubLevel(y: number) { this.tubLevel = y; if (this.tubWater) this.tubWater.position.y = y; }
   private artTex: THREE.Texture[] = []; private artGround: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
   private artDoor: { play(): void } | null = null; private artDoorAction: THREE.AnimationAction | null = null; private artDoorStop = 0; private artTumble: (() => void) | null = null;
   private disposed = false; private artObjs: THREE.Object3D[] = []; private artMixers: THREE.AnimationMixer[] = [];
@@ -313,7 +316,8 @@ export class Ch2Play {
     const { loadGLB } = await import('../assets');
     const ldG = (n: string) => loadGLB(base + n).then((m) => m, (e) => { console.error('第二章美术加载失败', n, e); return null; });
     const ld = (n: string) => ldG(n).then((m) => m?.scene ?? null);
-    const [stoneM, sluiceM, raftM, dryM, soakM] = await Promise.all(['stones.wasm', 'sluice.wasm', 'raft.wasm', 'floatwood_dry.wasm', 'floatwood_soaked.wasm'].map(ld));
+    const [stoneM, sluiceM, dryM, soakM] = await Promise.all(['stones.wasm', 'sluice.wasm', 'floatwood_dry.wasm', 'floatwood_soaked.wasm'].map(ld));
+    const [raftG, ttG] = await Promise.all([ldG('raft.wasm'), ldG('ttrow.wasm')]); const raftM = raftG?.scene ?? null;
     if (this.disposed) return;
     const hide = new THREE.MeshBasicMaterial({ visible: false }); this.mats.push(hide);
     const prep = (o: THREE.Object3D) => { this.artObjs.push(o); o.traverse((c) => { if (/^COL_/.test(c.name)) c.visible = false; const m = c as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } }); return o; };
@@ -338,6 +342,12 @@ export class Ch2Play {
       prep(raftM); const box = new THREE.Box3().setFromObject(raftM), c = box.getCenter(new THREE.Vector3());
       raftM.position.set(-c.x, -0.2 - box.min.y, -c.z); skin(this.raftMesh, raftM);
       for (const id of ALL5) { const mk = raftM.getObjectByName('MK_ch2_seat_' + id); if (mk) A.seats[id] = mk; }
+      // 0407 木筏 v022 的划桨动画 + 汤团坐划 v009：整个汤团划桨模型挂在 MK_ch2_seat_tangtuan 下（模型里已含相对座位的变换，不再加别的偏移），两段动画都从 t=0 同时播、同速循环
+      const mx = new THREE.AnimationMixer(raftM), clips: THREE.AnimationAction[] = [];
+      const rowClip = raftG!.animations.find((a) => a.name === 'ANIM_raft_row'); if (rowClip) clips.push(mx.clipAction(rowClip));
+      if (ttG && A.seats.tangtuan) { const tt = prep(ttG.scene); tt.visible = false; A.seats.tangtuan.add(tt); this.ttRow = tt;
+        const c2 = ttG.animations.find((a) => a.name === 'ANIM_tangtuan_raft_row'); if (c2) { const m2 = new THREE.AnimationMixer(tt); clips.push(m2.clipAction(c2)); this.artMixers.push(m2); } }
+      for (const a of clips) { a.play(); a.paused = true; } this.artMixers.push(mx); this.rowActs = clips;
     }
     this.art = A; // 先让第一批（稳石升降、木筏座位）生效，再等第二批
     // ---- C12 第二批：大树 3 棵、远景 3 层、河岸岩石和倒木、实验小件（都只看不碰，放在可走区外或河边水里）----
@@ -465,10 +475,49 @@ export class Ch2Play {
       plant(bp, [...plants.bush, ...plants.under.bush], 'bush', true); plant(fp, [...plants.fern, ...plants.under.fern], 'fern', false); plant(lp2, [...plants.flower, ...plants.under.flower], 'flower', false);
       A.plants = { instances: nInst, meshes: nMesh };
     } catch (e) { console.error('第二章植物加载失败', e); }
-    (window as any).__qhd.ch2art = { plants: A.plants, landform: !!landG, ground: this.artGround.length, reef: !!reefG, banks: A.banks ?? 0, turtle: !!turtleG, boathouse: !!bhG, trees: [t1, t2, t3].filter(Boolean).length, far: [f1, f2, f3].filter(Boolean).length, rocks: !!rockM, logs: !!logM, kit: !!kitM, stones: A.stones.length, sluice: !!sluiceM, raft: !!raftM, seats: Object.keys(A.seats), floatwood: !!dryM && !!soakM };
+    // ---- 0433：新增多种地被（三叶草、蕨、灌木、粉花、白花，703 株，叠加在原有草木上）、营火和火焰、木箱、木筏材料、试水槽、码头 ----
+    try {
+      const { applyWind } = await import('../scene_manifest');
+      const hab = await (await fetch(base + 'gc/habitat.json')).json() as number[][];
+      const hp = await Promise.all(['hab_clover_a', 'hab_clover_b', 'hab_fern', 'hab_bush', 'hab_pink_flower', 'hab_white_flower'].map((n) => ldG(n + '.wasm')));
+      if (this.disposed) return;
+      const M = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), P = new THREE.Vector3(), S = new THREE.Vector3(); let n = 0;
+      hp.forEach((g, k) => {
+        if (!g) return; const list = hab.filter((h) => h[0] === k); if (!list.length) return; g.scene.updateMatrixWorld(true); this.artObjs.push(g.scene);
+        const cells = new Map<string, number[][]>(); for (const it of list) { const key = Math.floor(it[1] / 16) + ',' + Math.floor(it[2] / 16); (cells.get(key) ?? cells.set(key, []).get(key)!).push(it); }
+        g.scene.traverse((o) => { const m = o as THREE.Mesh; if (!m.isMesh) return; const pm = m.matrixWorld.clone();
+          for (const cl of cells.values()) { const im = new THREE.InstancedMesh(m.geometry, m.material, cl.length);
+            cl.forEach(([, x, z, yaw, sc], i) => { q.setFromAxisAngle(up, yaw); M.compose(P.set(x, 0.005, z), q, S.set(sc, sc, sc)).multiply(pm); im.setMatrixAt(i, M); });
+            im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); im.receiveShadow = true; im.castShadow = k === 3; im.name = 'ch2_art_hab'; this.root.add(im); this.artObjs.push(im); applyWind(im, 0.05); } });
+        n += list.length;
+      });
+      A.habitat = n;
+    } catch (e) { console.error('第二章新增地被加载失败', e); }
+    {
+      const [fireG, flameG, crateG, matsG, troughG, dockG] = await Promise.all(['props_campfire', 'props_flame', 'props_crate', 'props_raft_materials', 'props_trough', 'props_dock'].map((n) => ldG(n + '.wasm')));
+      if (this.disposed) return;
+      const hideMk = (nm: string) => { const m = this.root.getObjectByName(nm); if (m) m.visible = false; };
+      const put = (g: { scene: THREE.Object3D } | null, x: number, z: number, ry = 0) => { if (!g) return null; const o = prep(g.scene); o.position.set(x, 0, z); o.rotation.y = ry; this.root.add(o); return o; };
+      if (put(fireG, -12.5, 26.5)) hideMk('ch2_campfire_marker');
+      if (flameG) {
+        const o = put(flameG, -12.5, 26.5)!; o.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh) { m.castShadow = false; m.receiveShadow = false; } });
+        if (flameG.animations?.length) { const mx = new THREE.AnimationMixer(o); for (const c of flameG.animations) mx.clipAction(c).play(); this.artMixers.push(mx); }
+        // 火光：一盏不投影的暖色点光，亮度随时间闪动（0432 说好由 Claude 负责）
+        const L = new THREE.PointLight(0xffa04a, 2.2, 7, 1.6); L.position.set(-12.5, 0.9, 26.5); L.name = 'ch2_fire_light'; this.root.add(L); this.fireLight = L;
+      }
+      if (put(crateG, CRATE.x, CRATE.z)) hideMk('ch2_crate_marker');
+      put(matsG, CRATE.x - 1.35, CRATE.z + 1.0, 0.4); // 只是摆着看的木板和绳子，不是拾取物
+      if (troughG) { put(troughG, COVE.x, COVE.z); if (this.tubMesh) this.tubMesh.visible = false; this.setTubLevel(0.6); } // 0433：槽口 0.65，水面和样品基准都改 0.60
+      put(dockG, DOCK.x, DOCK.z);
+      A.props = [fireG, flameG, crateG, matsG, troughG, dockG].filter(Boolean).length;
+    }
+    (window as any).__qhd.ch2art = { habitat: A.habitat ?? 0, props: A.props ?? 0, plants: A.plants, landform: !!landG, ground: this.artGround.length, reef: !!reefG, banks: A.banks ?? 0, turtle: !!turtleG, boathouse: !!bhG, trees: [t1, t2, t3].filter(Boolean).length, far: [f1, f2, f3].filter(Boolean).length, rocks: !!rockM, logs: !!logM, kit: !!kitM, stones: A.stones.length, sluice: !!sluiceM, raft: !!raftM, seats: Object.keys(A.seats), floatwood: !!dryM && !!soakM };
   }
   private updateArt(dt = 0) {
     for (const mx of this.artMixers) mx.update(dt);
+    { const on = !!this.raft; if (on !== this.rowOn) { this.rowOn = on; for (const a of this.rowActs) { a.time = 0; a.paused = !on; } // 上筏：两段动画从 0 一起开始
+        const tt = this.g.actors.tangtuan; if (this.ttRow && tt?.model) { this.ttRow.visible = on; tt.model.visible = !on; } } } // 只藏汤团的正式模型（Actor 自己会按遮挡开关 root）
+    if (this.fireLight) { const t = performance.now() / 1000; this.fireLight.intensity = 2.0 + Math.sin(t * 11) * 0.25 + Math.sin(t * 23.7) * 0.18 + Math.sin(t * 5.3) * 0.2; }
     const da = this.artDoorAction; if (da && !da.paused && this.artDoorStop && da.time >= this.artDoorStop) { da.time = this.artDoorStop; da.paused = true; }
     const A = this.art; if (!A || !A.grayStones.length) return;
     A.stones.forEach((o, k) => { const g0 = A.grayStones[k * 4]; if (g0) o.position.y = g0.position.y + 0.5 - STONE_TOPS[0]; });
@@ -1068,7 +1117,7 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
 
   // ======================= 道具动画 =======================
   private animProps(dt: number, t: number) {
-    const S = this.sample, base = 0.56;
+    const S = this.sample, base = this.tubLevel;
     if (S.anim) {
       S.anim.t += dt; const u = Math.min(1, S.anim.t / 1.2), e = 1 - Math.pow(1 - u, 3);
       const wy = S.anim.mode === 'weight';
@@ -1248,7 +1297,8 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
     this.restoreLook();
     { this.g.ui.bag([]); const el = document.getElementById('bag'); if (el) el.style.bottom = '20px'; }
     { const seen = new Set<unknown>(); for (const o of this.artObjs) { o.removeFromParent(); o.traverse((c) => { const m = c as THREE.Mesh; if (!m.isMesh) return; if ((m as any).isInstancedMesh) (m as unknown as THREE.InstancedMesh).dispose(); if (!seen.has(m.geometry)) { seen.add(m.geometry); m.geometry.dispose(); }
-      for (const mt of ([] as THREE.Material[]).concat(m.material)) { if (seen.has(mt)) continue; seen.add(mt); for (const v of Object.values(mt)) if ((v as THREE.Texture)?.isTexture && !seen.has(v)) { seen.add(v); (v as THREE.Texture).dispose(); } mt.dispose(); } }); } this.artObjs = []; this.art = null; for (const t of this.artTex) t.dispose(); this.artTex = []; for (const [m, o] of this.artGround) m.material = o; this.artGround = []; for (const mx of this.artMixers) mx.stopAllAction(); this.artMixers = []; }
+      for (const mt of ([] as THREE.Material[]).concat(m.material)) { if (seen.has(mt)) continue; seen.add(mt); for (const v of Object.values(mt)) if ((v as THREE.Texture)?.isTexture && !seen.has(v)) { seen.add(v); (v as THREE.Texture).dispose(); } mt.dispose(); } }); } if (this.ttRow) { const tt = this.g.actors.tangtuan; if (tt?.model) tt.model.visible = true; } this.ttRow = null; this.rowActs = []; this.rowOn = false;
+    this.artObjs = []; this.art = null; if (this.fireLight) { this.fireLight.removeFromParent(); this.fireLight.dispose(); this.fireLight = null; } for (const t of this.artTex) t.dispose(); this.artTex = []; for (const [m, o] of this.artGround) m.material = o; this.artGround = []; for (const mx of this.artMixers) mx.stopAllAction(); this.artMixers = []; }
     // 文件缓存（THREE.Cache 留着原始 GLB 字节）：第二章专用的模型离开时一起清掉，下次进章节从浏览器缓存重新读
     for (const k of Object.keys((THREE.Cache as any).files)) if (/ch2_art|youyou|beibei/.test(k)) THREE.Cache.remove(k);
     const g = this.g;
