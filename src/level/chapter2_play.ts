@@ -153,10 +153,10 @@ export class Ch2Play {
   }
   private buildCove() {
     // C6 试水槽：码头边一个木水槽（不挖地，免得碰撞复杂）。三个样品一样大：干浮木、泡水木、石板
-    const tub = this.mesh(new THREE.BoxGeometry(1.3, 0.6, 2.6), this.std(0x8a6a44)); tub.position.set(COVE.x, 0.3, COVE.z); this.root.add(tub);
+    const tub = this.mesh(new THREE.BoxGeometry(1.3, 0.6, 2.6), this.std(0x8a6a44)); tub.position.set(COVE.x, 0.3, COVE.z); this.root.add(tub); this.tubMesh = tub;
     this.cols.push(this.g.ph.box(this.W(COVE, 0.3), { x: 1.3, y: 0.6, z: 2.6 }));
     const water = this.mesh(new THREE.PlaneGeometry(1.1, 2.4), new THREE.MeshStandardMaterial({ color: 0x6fa3ad, transparent: true, opacity: 0.75, roughness: 0.2 }));
-    water.rotation.x = -Math.PI / 2; water.position.set(COVE.x, 0.62, COVE.z); this.root.add(water);
+    water.rotation.x = -Math.PI / 2; water.position.set(COVE.x, 0.56, COVE.z); this.root.add(water); this.tubWater = water; // 0427：槽口高 0.60，水面放在槽口下面（v121b 时这句被注释吞掉了，水槽没水，11-18 修）
     // 三个样品沿水槽一字排开（北→南：干浮木、泡水木、石板），没放下水时摆在水槽西边的木板上
     const mk = (c: number, z: number) => { const m = this.mesh(new THREE.BoxGeometry(0.3, 0.18, 0.5), this.std(c)); m.position.set(COVE.x - 0.95, 0.95, COVE.z + z); m.userData.z = COVE.z + z; m.castShadow = true; this.root.add(m); return m; };
     const w = (z: number) => { const m = this.mesh(new THREE.SphereGeometry(0.09, 8, 6), this.std(0x8b8b86)); m.position.set(COVE.x - 1.25, 0.95, COVE.z + z); m.visible = false; this.root.add(m); return m; };
@@ -303,7 +303,10 @@ export class Ch2Play {
   // ======================= 主循环 =======================
   // ======================= C12 美术（Codex 资产）=======================
   // 做法：灰盒的碰撞和玩法一律不动，只把灰盒方块换成透明、把 Codex 模型挂上去跟着动。?ch2art=0 或 ?gray=1 回到纯灰盒
-  private art: { stones: THREE.Object3D[]; grayStones: THREE.Object3D[]; seats: Partial<Record<CharId, THREE.Object3D>>; banks?: number; plants?: { instances: number; meshes: number } } | null = null;
+  private art: { stones: THREE.Object3D[]; grayStones: THREE.Object3D[]; seats: Partial<Record<CharId, THREE.Object3D>>; banks?: number; plants?: { instances: number; meshes: number }; habitat?: number; props?: number } | null = null;
+  private ttRow: THREE.Object3D | null = null; private rowActs: THREE.AnimationAction[] = []; private rowOn = false;
+  private fireLight: THREE.PointLight | null = null; private tubMesh: THREE.Mesh | null = null; private tubWater: THREE.Mesh | null = null; private tubLevel = 0.56;
+  private setTubLevel(y: number) { this.tubLevel = y; if (this.tubWater) this.tubWater.position.y = y; }
   private artTex: THREE.Texture[] = []; private artGround: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
   private artDoor: { play(): void } | null = null; private artDoorAction: THREE.AnimationAction | null = null; private artDoorStop = 0; private artTumble: (() => void) | null = null;
   private disposed = false; private artObjs: THREE.Object3D[] = []; private artMixers: THREE.AnimationMixer[] = [];
@@ -313,7 +316,8 @@ export class Ch2Play {
     const { loadGLB } = await import('../assets');
     const ldG = (n: string) => loadGLB(base + n).then((m) => m, (e) => { console.error('第二章美术加载失败', n, e); return null; });
     const ld = (n: string) => ldG(n).then((m) => m?.scene ?? null);
-    const [stoneM, sluiceM, raftM, dryM, soakM] = await Promise.all(['stones.wasm', 'sluice.wasm', 'raft.wasm', 'floatwood_dry.wasm', 'floatwood_soaked.wasm'].map(ld));
+    const [stoneM, sluiceM, dryM, soakM] = await Promise.all(['stones.wasm', 'sluice.wasm', 'floatwood_dry.wasm', 'floatwood_soaked.wasm'].map(ld));
+    const [raftG, ttG] = await Promise.all([ldG('raft.wasm'), ldG('ttrow.wasm')]); const raftM = raftG?.scene ?? null;
     if (this.disposed) return;
     const hide = new THREE.MeshBasicMaterial({ visible: false }); this.mats.push(hide);
     const prep = (o: THREE.Object3D) => { this.artObjs.push(o); o.traverse((c) => { if (/^COL_/.test(c.name)) c.visible = false; const m = c as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } }); return o; };
@@ -338,6 +342,12 @@ export class Ch2Play {
       prep(raftM); const box = new THREE.Box3().setFromObject(raftM), c = box.getCenter(new THREE.Vector3());
       raftM.position.set(-c.x, -0.2 - box.min.y, -c.z); skin(this.raftMesh, raftM);
       for (const id of ALL5) { const mk = raftM.getObjectByName('MK_ch2_seat_' + id); if (mk) A.seats[id] = mk; }
+      // 0407 木筏 v022 的划桨动画 + 汤团坐划 v009：整个汤团划桨模型挂在 MK_ch2_seat_tangtuan 下（模型里已含相对座位的变换，不再加别的偏移），两段动画都从 t=0 同时播、同速循环
+      const mx = new THREE.AnimationMixer(raftM), clips: THREE.AnimationAction[] = [];
+      const rowClip = raftG!.animations.find((a) => a.name === 'ANIM_raft_row'); if (rowClip) clips.push(mx.clipAction(rowClip));
+      if (ttG && A.seats.tangtuan) { const tt = prep(ttG.scene); tt.visible = false; A.seats.tangtuan.add(tt); this.ttRow = tt;
+        const c2 = ttG.animations.find((a) => a.name === 'ANIM_tangtuan_raft_row'); if (c2) { const m2 = new THREE.AnimationMixer(tt); clips.push(m2.clipAction(c2)); this.artMixers.push(m2); } }
+      for (const a of clips) { a.play(); a.paused = true; } this.artMixers.push(mx); this.rowActs = clips;
     }
     this.art = A; // 先让第一批（稳石升降、木筏座位）生效，再等第二批
     // ---- C12 第二批：大树 3 棵、远景 3 层、河岸岩石和倒木、实验小件（都只看不碰，放在可走区外或河边水里）----
@@ -410,25 +420,27 @@ export class Ch2Play {
     if (this.disposed) return;
     // 外缘草土坡（单网格，章节局部坐标）：盖住 16 段外侧直墙；墙的碰撞保留，只把墙变透明
     // 河边矮坎（灰盒蓝灰色）换成和土路接近的颜色，地面和岸线之间不再有一条灰边（碰撞不变）
-    { const done = new Set<THREE.Material>(); this.root.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh && /^ch2_(river|pool)_curb_/.test(c.name) && !Array.isArray(m.material) && !done.has(m.material)) { done.add(m.material); (m.material as THREE.MeshStandardMaterial).color?.setHex(0x9c8566); } }); }
+    { const done = new Set<THREE.Material>(); this.root.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh && /^ch2_(river|pool)_curb_/.test(c.name) && !Array.isArray(m.material) && !done.has(m.material)) { done.add(m.material); (m.material as THREE.MeshStandardMaterial).color?.setHex(0x9c8566); } if (m.isMesh && /^ch2_river_curb_/.test(c.name) && new URLSearchParams(location.search).has('curb0')) m.visible = false; /* 0429 要的对比：?curb0 只藏矮坎外观，碰撞照旧 */ }); }
     if (landG) { const o = prep(landG.scene); o.name = 'ch2_art_landform'; this.root.add(o); this.root.traverse((c) => { if (c.name.startsWith('ch2_berm_')) (c as THREE.Mesh).material = hide; }); }
     // 地面：每块可走区顶面换成「草地 / 土路」混合（黑白图：黑=土路，白=草），碰撞不变
     try {
       const tl = new THREE.TextureLoader(), lt = (n: string, srgb: boolean, rep2: boolean) => new Promise<THREE.Texture>((res, rej) => tl.load(base + 'gc/' + n, (t) => { if (srgb) t.colorSpace = THREE.SRGBColorSpace; if (rep2) t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; res(t); }, undefined, rej));
-      const [meadow, soil] = await Promise.all([lt('meadow_albedo_1024.png', true, true), lt('light_soil_albedo_512.png', true, true)]);
-      const O = this.g.ch2!.world(0, 0, 0); this.artTex.push(meadow, soil);
+      const [meadow, soil, meadowDk] = await Promise.all([lt('meadow_albedo_1024.png', true, true), lt('light_soil_albedo_512.png', true, true), lt('meadow_dark_1024.png', true, true)]);
+      const O = this.g.ch2!.world(0, 0, 0); this.artTex.push(meadow, soil, meadowDk);
+      // 0425 水面贴图：白沫（R 当权重）、细波纹法线（OpenGL +Y），都按线性数据读
+      if (this.waterU) { const W = this.waterU; Promise.all([lt('ch2_foam_mask_512.png', false, true), lt('ch2_ripple_normal_gl_512.png', false, true)]).then(([f, n]) => { if (this.disposed) { f.dispose(); n.dispose(); return; } this.artTex.push(f, n); W.uFoamT.value = f; W.uRipN.value = n; W.uHasT.value = 1; }, (e) => console.error('第二章水面贴图加载失败', e)); }
       for (const [id, rect] of GROUND_RECTS) {
         const mesh = this.root.getObjectByName('ch2_' + id) as THREE.Mesh | undefined; if (!mesh || Array.isArray(mesh.material)) continue;
-        const mask = await lt(id + '.png', false, false); if (this.disposed) return; this.artTex.push(mask);
+        const [mask, shade] = await Promise.all([lt(id + '.png', false, false), lt('shade/' + id + '.png', false, false)]); if (this.disposed) return; this.artTex.push(mask, shade); // 0429/0431：shade 0 浅草 / 255 深草
         const gm = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0 }); this.mats.push(gm);
         gm.onBeforeCompile = (sh) => {
-          Object.assign(sh.uniforms, { uMask: { value: mask }, uMeadow: { value: meadow }, uSoil: { value: soil }, uRect: { value: new THREE.Vector4(...rect) }, uO: { value: new THREE.Vector2(O.x, O.z) } });
+          Object.assign(sh.uniforms, { uMask: { value: mask }, uShade: { value: shade }, uMeadowDk: { value: meadowDk }, uMeadow: { value: meadow }, uSoil: { value: soil }, uRect: { value: new THREE.Vector4(...rect) }, uO: { value: new THREE.Vector2(O.x, O.z) } });
           sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-          sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW; uniform sampler2D uMask, uMeadow, uSoil; uniform vec4 uRect; uniform vec2 uO;')
+          sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW; uniform sampler2D uMask, uShade, uMeadowDk, uMeadow, uSoil; uniform vec4 uRect; uniform vec2 uO;')
             .replace('#include <map_fragment>', `vec2 lp = vGW.xz - uO; vec2 mu = vec2((lp.x - uRect.x) / (uRect.y - uRect.x), (lp.y - uRect.z) / (uRect.w - uRect.z));
-              float w = texture2D(uMask, clamp(mu, 0.001, 0.999)).r; vec3 md = mix(texture2D(uMeadow, lp / 7.0).rgb, texture2D(uMeadow, mat2(0.8, 0.6, -0.6, 0.8) * lp / 19.0).rgb, 0.45), sl = texture2D(uSoil, lp / 3.5).rgb;
-              md *= vec3(0.9, 1.06, 0.84); // 草地往绿里压一点（Codex 换更绿的草地图后可去掉）
-              vec3 gcol = mix(sl, md, smoothstep(0.1, 0.6, w));
+              float w = texture2D(uMask, clamp(mu, 0.001, 0.999)).r; float shd = texture2D(uShade, clamp(mu, 0.001, 0.999)).r; vec3 md0 = mix(texture2D(uMeadow, lp / 7.0).rgb, texture2D(uMeadow, mat2(0.8, 0.6, -0.6, 0.8) * lp / 19.0).rgb, 0.45);
+              vec3 md = mix(md0, mix(texture2D(uMeadowDk, lp / 7.0 + 0.31).rgb, texture2D(uMeadowDk, mat2(0.8, 0.6, -0.6, 0.8) * lp / 19.0).rgb, 0.45), shd * 0.85), sl = texture2D(uSoil, lp / 3.5).rgb;
+              vec3 gcol = mix(sl, md, smoothstep(0.2, 0.8, w)); // 0425 新草土图按这个混合算的
               // 水边湿土带：离河（|x|<6）或石龟池 2.5 米以内逐渐变深、变湿
               float dRiver = (lp.y < 31.0 && lp.y > -42.0) ? abs(lp.x) - 6.0 : 99.0;
               vec2 pq = max(vec2(34.0, 52.0) - lp, lp - vec2(44.0, 60.0)); float dPool = length(max(pq, 0.0)) + min(max(pq.x, pq.y), 0.0);
@@ -463,10 +475,49 @@ export class Ch2Play {
       plant(bp, [...plants.bush, ...plants.under.bush], 'bush', true); plant(fp, [...plants.fern, ...plants.under.fern], 'fern', false); plant(lp2, [...plants.flower, ...plants.under.flower], 'flower', false);
       A.plants = { instances: nInst, meshes: nMesh };
     } catch (e) { console.error('第二章植物加载失败', e); }
-    (window as any).__qhd.ch2art = { plants: A.plants, landform: !!landG, ground: this.artGround.length, reef: !!reefG, banks: A.banks ?? 0, turtle: !!turtleG, boathouse: !!bhG, trees: [t1, t2, t3].filter(Boolean).length, far: [f1, f2, f3].filter(Boolean).length, rocks: !!rockM, logs: !!logM, kit: !!kitM, stones: A.stones.length, sluice: !!sluiceM, raft: !!raftM, seats: Object.keys(A.seats), floatwood: !!dryM && !!soakM };
+    // ---- 0433：新增多种地被（三叶草、蕨、灌木、粉花、白花，703 株，叠加在原有草木上）、营火和火焰、木箱、木筏材料、试水槽、码头 ----
+    try {
+      const { applyWind } = await import('../scene_manifest');
+      const hab = await (await fetch(base + 'gc/habitat.json')).json() as number[][];
+      const hp = await Promise.all(['hab_clover_a', 'hab_clover_b', 'hab_fern', 'hab_bush', 'hab_pink_flower', 'hab_white_flower'].map((n) => ldG(n + '.wasm')));
+      if (this.disposed) return;
+      const M = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), P = new THREE.Vector3(), S = new THREE.Vector3(); let n = 0;
+      hp.forEach((g, k) => {
+        if (!g) return; const list = hab.filter((h) => h[0] === k); if (!list.length) return; g.scene.updateMatrixWorld(true); this.artObjs.push(g.scene);
+        const cells = new Map<string, number[][]>(); for (const it of list) { const key = Math.floor(it[1] / 16) + ',' + Math.floor(it[2] / 16); (cells.get(key) ?? cells.set(key, []).get(key)!).push(it); }
+        g.scene.traverse((o) => { const m = o as THREE.Mesh; if (!m.isMesh) return; const pm = m.matrixWorld.clone();
+          for (const cl of cells.values()) { const im = new THREE.InstancedMesh(m.geometry, m.material, cl.length);
+            cl.forEach(([, x, z, yaw, sc], i) => { q.setFromAxisAngle(up, yaw); M.compose(P.set(x, 0.005, z), q, S.set(sc, sc, sc)).multiply(pm); im.setMatrixAt(i, M); });
+            im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); im.receiveShadow = true; im.castShadow = k === 3; im.name = 'ch2_art_hab'; this.root.add(im); this.artObjs.push(im); applyWind(im, 0.05); } });
+        n += list.length;
+      });
+      A.habitat = n;
+    } catch (e) { console.error('第二章新增地被加载失败', e); }
+    {
+      const [fireG, flameG, crateG, matsG, troughG, dockG] = await Promise.all(['props_campfire', 'props_flame', 'props_crate', 'props_raft_materials', 'props_trough', 'props_dock'].map((n) => ldG(n + '.wasm')));
+      if (this.disposed) return;
+      const hideMk = (nm: string) => { const m = this.root.getObjectByName(nm); if (m) m.visible = false; };
+      const put = (g: { scene: THREE.Object3D } | null, x: number, z: number, ry = 0) => { if (!g) return null; const o = prep(g.scene); o.position.set(x, 0, z); o.rotation.y = ry; this.root.add(o); return o; };
+      if (put(fireG, -12.5, 26.5)) hideMk('ch2_campfire_marker');
+      if (flameG) {
+        const o = put(flameG, -12.5, 26.5)!; o.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh) { m.castShadow = false; m.receiveShadow = false; } });
+        if (flameG.animations?.length) { const mx = new THREE.AnimationMixer(o); for (const c of flameG.animations) mx.clipAction(c).play(); this.artMixers.push(mx); }
+        // 火光：一盏不投影的暖色点光，亮度随时间闪动（0432 说好由 Claude 负责）
+        const L = new THREE.PointLight(0xffa04a, 2.2, 7, 1.6); L.position.set(-12.5, 0.9, 26.5); L.name = 'ch2_fire_light'; this.root.add(L); this.fireLight = L;
+      }
+      if (put(crateG, CRATE.x, CRATE.z)) hideMk('ch2_crate_marker');
+      put(matsG, CRATE.x - 1.35, CRATE.z + 1.0, 0.4); // 只是摆着看的木板和绳子，不是拾取物
+      if (troughG) { put(troughG, COVE.x, COVE.z); if (this.tubMesh) this.tubMesh.visible = false; this.setTubLevel(0.6); } // 0433：槽口 0.65，水面和样品基准都改 0.60
+      put(dockG, DOCK.x, DOCK.z);
+      A.props = [fireG, flameG, crateG, matsG, troughG, dockG].filter(Boolean).length;
+    }
+    (window as any).__qhd.ch2art = { habitat: A.habitat ?? 0, props: A.props ?? 0, plants: A.plants, landform: !!landG, ground: this.artGround.length, reef: !!reefG, banks: A.banks ?? 0, turtle: !!turtleG, boathouse: !!bhG, trees: [t1, t2, t3].filter(Boolean).length, far: [f1, f2, f3].filter(Boolean).length, rocks: !!rockM, logs: !!logM, kit: !!kitM, stones: A.stones.length, sluice: !!sluiceM, raft: !!raftM, seats: Object.keys(A.seats), floatwood: !!dryM && !!soakM };
   }
   private updateArt(dt = 0) {
     for (const mx of this.artMixers) mx.update(dt);
+    { const on = !!this.raft; if (on !== this.rowOn) { this.rowOn = on; for (const a of this.rowActs) { a.time = 0; a.paused = !on; } // 上筏：两段动画从 0 一起开始
+        const tt = this.g.actors.tangtuan; if (this.ttRow && tt?.model) { this.ttRow.visible = on; tt.model.visible = !on; } } } // 只藏汤团的正式模型（Actor 自己会按遮挡开关 root）
+    if (this.fireLight) { const t = performance.now() / 1000; this.fireLight.intensity = 2.0 + Math.sin(t * 11) * 0.25 + Math.sin(t * 23.7) * 0.18 + Math.sin(t * 5.3) * 0.2; }
     const da = this.artDoorAction; if (da && !da.paused && this.artDoorStop && da.time >= this.artDoorStop) { da.time = this.artDoorStop; da.paused = true; }
     const A = this.art; if (!A || !A.grayStones.length) return;
     A.stones.forEach((o, k) => { const g0 = A.grayStones[k * 4]; if (g0) o.position.y = g0.position.y + 0.5 - STONE_TOPS[0]; });
@@ -502,7 +553,7 @@ export class Ch2Play {
     this.lookSaved = null;
   }
   /** 水面：顺流（往 +z）流动的细波纹、河中间深两边浅、稳石 / 礁石 / 倒木四周和急流段一圈白沫。只改河面材质，不碰玩法 */
-  private waterU: { uT: { value: number } } | null = null;
+  private waterU: { uT: { value: number }; uFoamT: { value: THREE.Texture }; uRipN: { value: THREE.Texture }; uHasT: { value: number } } | null = null;
   private buildWater() {
     const w = this.root.getObjectByName('ch2_water') as THREE.Mesh | undefined; if (!w || new URLSearchParams(location.search).has('ch2water0')) return;
     const m = w.material as THREE.MeshStandardMaterial, O = this.g.ch2!.world(0, 0, 0);
@@ -512,13 +563,14 @@ export class Ch2Play {
     if (this.log) pts.push(new THREE.Vector3(this.log.position.x, this.log.position.z, 2.0));
     for (let d = RAPID_D - 4; d <= RAPID_D + 4; d += 2) { const p = this.pathAt(d, 0); pts.push(new THREE.Vector3(p.x, p.z, 2.4)); }
     const N = 24; while (pts.length < N) pts.push(new THREE.Vector3(9999, 9999, 0.01)); pts.length = N;
-    const U = { uT: { value: 0 } }; this.waterU = U;
+    const ph = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1); ph.needsUpdate = true; this.artTex.push(ph);
+    const U = { uT: { value: 0 }, uFoamT: { value: ph as THREE.Texture }, uRipN: { value: ph as THREE.Texture }, uHasT: { value: 0 } }; this.waterU = U;
     m.transparent = true; m.opacity = 0.9; m.roughness = 0.12; m.color.setHex(0xffffff);
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, U, { uO: { value: new THREE.Vector2(O.x, O.z) }, uP: { value: pts } });
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWW;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-varying vec3 vWW; uniform float uT; uniform vec2 uO; uniform vec3 uP[${N}];
+varying vec3 vWW; uniform float uT; uniform vec2 uO; uniform vec3 uP[${N}]; uniform sampler2D uFoamT, uRipN; uniform float uHasT;
 float hsh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return mix(mix(hsh(i), hsh(i+vec2(1,0)), f.x), mix(hsh(i+vec2(0,1)), hsh(i+vec2(1,1)), f.x), f.y); }`)
         .replace('#include <map_fragment>', `vec2 lp = vWW.xz - uO;
@@ -528,13 +580,15 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
   vec2 fl = vec2(lp.x * 1.3, lp.y * 0.55 - uT * 1.4);
   float rip = vn(fl * 1.6) * 0.6 + vn(fl * 4.1 + 7.0) * 0.4;
   float foam = 0.0;
-  for (int i = 0; i < ${N}; i++) { vec2 d = lp - uP[i].xy; d.y -= 0.35 * uP[i].z; float r = length(d * vec2(1.0, 0.75)); float ring = 1.0 - smoothstep(uP[i].z * 0.55, uP[i].z * 1.25, r); foam = max(foam, ring * smoothstep(0.35, 0.75, vn(lp * 3.2 + vec2(0.0, -uT * 2.2)) + ring * 0.25)); }
+  for (int i = 0; i < ${N}; i++) { vec2 d = lp - uP[i].xy; d.y -= 0.35 * uP[i].z; float r = length(d * vec2(1.0, 0.75)); float ring = 1.0 - smoothstep(uP[i].z * 0.55, uP[i].z * 1.25, r); float fn = mix(vn(lp * 3.2 + vec2(0.0, -uT * 2.2)), texture2D(uFoamT, lp * 0.33 + vec2(0.0, -uT * 0.45)).r, uHasT); foam = max(foam, ring * smoothstep(0.3, 0.7, fn * 0.8 + ring * 0.45)); }
   foam = max(foam, smoothstep(5.55, 5.95, abs(lp.x)) * step(lp.y, 30.0) * smoothstep(0.45, 0.8, vn(vec2(lp.x * 6.0, lp.y * 1.5 - uT * 1.8))));
   diffuseColor.rgb += (rip - 0.5) * 0.06;
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.96, 0.95), foam * 0.85);
   diffuseColor.a = mix(diffuseColor.a, 1.0, foam * 0.8);`)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-  { vec2 e = vec2(0.08, 0.0); float h0 = vn(fl * 1.6), hx = vn((fl + e.xy) * 1.6), hz = vn((fl + e.yx) * 1.6); normal = normalize(normal + vec3(h0 - hx, 0.0, h0 - hz) * 1.1); }`);
+  { vec2 e = vec2(0.08, 0.0); float h0 = vn(fl * 1.6), hx = vn((fl + e.xy) * 1.6), hz = vn((fl + e.yx) * 1.6); vec3 pn = vec3(h0 - hx, 0.0, h0 - hz) * 1.1;
+    vec3 tn = texture2D(uRipN, fl * 0.32).xyz * 2.0 - 1.0; vec3 tn2 = texture2D(uRipN, vec2(lp.x, lp.y + uT * 0.6) * 0.21 + 0.37).xyz * 2.0 - 1.0; vec3 txn = vec3(tn.x + tn2.x, 0.0, -(tn.y + tn2.y)) * 0.35;
+    normal = normalize(normal + mix(pn, txn, uHasT)); }`);
     };
     m.needsUpdate = true;
   }
@@ -588,6 +642,10 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
       // C12：有 Codex 正式模型时，守岗用共用交互动作（汤团双手顶撑杆、佑佑扳拉杆）；灰盒没有这些片段，自动忽略
       if (this.posted.brace && g.actors.tangtuan) g.actors.tangtuan.interWant = 'brace_door';
       if (this.posted.lever && g.actors.youyou) g.actors.youyou.interWant = 'pry';
+      // 守岗时脸朝向杆子（0427：佑佑扳拉杆的手要对得上杆，先把朝向固定；拉杆立杆在站位西边 0.6 m，撑杆顶在东边的闸门侧板上）
+      { const yy = g.actors.youyou, tt = g.actors.tangtuan;
+        if (this.posted.lever && yy && yy.pos.distanceTo(this.W(LEVER, yy.pos.y - this.g.ch2!.world(0, 0, 0).y)) < 0.45) yy.faceTo(this.W(V(LEVER.x - 0.6, LEVER.z), yy.pos.y));
+        if (this.posted.brace && tt && tt.pos.distanceTo(this.W(BRACE, tt.pos.y - this.g.ch2!.world(0, 0, 0).y)) < 0.45) tt.faceTo(this.W(V(BRACE.x + 0.9, BRACE.z), tt.pos.y)); }
       this.updateYouyouPath();
       this.checkFalls(dt);
     }
@@ -1059,7 +1117,7 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
 
   // ======================= 道具动画 =======================
   private animProps(dt: number, t: number) {
-    const S = this.sample, base = 0.62;
+    const S = this.sample, base = this.tubLevel;
     if (S.anim) {
       S.anim.t += dt; const u = Math.min(1, S.anim.t / 1.2), e = 1 - Math.pow(1 - u, 3);
       const wy = S.anim.mode === 'weight';
@@ -1239,7 +1297,8 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return m
     this.restoreLook();
     { this.g.ui.bag([]); const el = document.getElementById('bag'); if (el) el.style.bottom = '20px'; }
     { const seen = new Set<unknown>(); for (const o of this.artObjs) { o.removeFromParent(); o.traverse((c) => { const m = c as THREE.Mesh; if (!m.isMesh) return; if ((m as any).isInstancedMesh) (m as unknown as THREE.InstancedMesh).dispose(); if (!seen.has(m.geometry)) { seen.add(m.geometry); m.geometry.dispose(); }
-      for (const mt of ([] as THREE.Material[]).concat(m.material)) { if (seen.has(mt)) continue; seen.add(mt); for (const v of Object.values(mt)) if ((v as THREE.Texture)?.isTexture && !seen.has(v)) { seen.add(v); (v as THREE.Texture).dispose(); } mt.dispose(); } }); } this.artObjs = []; this.art = null; for (const t of this.artTex) t.dispose(); this.artTex = []; for (const [m, o] of this.artGround) m.material = o; this.artGround = []; for (const mx of this.artMixers) mx.stopAllAction(); this.artMixers = []; }
+      for (const mt of ([] as THREE.Material[]).concat(m.material)) { if (seen.has(mt)) continue; seen.add(mt); for (const v of Object.values(mt)) if ((v as THREE.Texture)?.isTexture && !seen.has(v)) { seen.add(v); (v as THREE.Texture).dispose(); } mt.dispose(); } }); } if (this.ttRow) { const tt = this.g.actors.tangtuan; if (tt?.model) tt.model.visible = true; } this.ttRow = null; this.rowActs = []; this.rowOn = false;
+    this.artObjs = []; this.art = null; if (this.fireLight) { this.fireLight.removeFromParent(); this.fireLight.dispose(); this.fireLight = null; } for (const t of this.artTex) t.dispose(); this.artTex = []; for (const [m, o] of this.artGround) m.material = o; this.artGround = []; for (const mx of this.artMixers) mx.stopAllAction(); this.artMixers = []; }
     // 文件缓存（THREE.Cache 留着原始 GLB 字节）：第二章专用的模型离开时一起清掉，下次进章节从浏览器缓存重新读
     for (const k of Object.keys((THREE.Cache as any).files)) if (/ch2_art|youyou|beibei/.test(k)) THREE.Cache.remove(k);
     const g = this.g;
