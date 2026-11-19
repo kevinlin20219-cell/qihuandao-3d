@@ -47,6 +47,8 @@ export interface LoadedModel {
 
 /** 加载 Codex 交付的 GLB。只读，不修改原文件。 */
 THREE.Cache.enabled = true; // 0111：共享贴图文件（shared/tex_*.wasm）多个模型引用时只下载一次
+// 11-19 内存上涨的根源：GLB 里的贴图是用临时 blob: 地址解码的，每次加载地址都不同，THREE.Cache 却永远留着（反复进出章节累积上千条，连带 KTX2 解码结果也放不掉）。blob: 地址只用一次，不进缓存
+{ const add = THREE.Cache.add.bind(THREE.Cache); THREE.Cache.add = (key: string, file: unknown) => { if (/^[a-z-]+:blob:/.test(key)) return; add(key, file); }; }
 export async function loadGLB(url: string): Promise<LoadedModel> {
   const t0 = performance.now();
   const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
